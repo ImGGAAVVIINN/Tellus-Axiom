@@ -54,7 +54,7 @@ public final class HighYPackedCoordinateProfile {
    public static final int DIMENSION_MAX_Y = 12_271;
    public static final int DIMENSION_Y_SIZE = DIMENSION_MAX_Y - DIMENSION_MIN_Y + 1;
 
-   private static final String REQUESTED_PROFILE = System.getProperty(PROFILE_PROPERTY, PROFILE_ID).trim();
+   private static final String REQUESTED_PROFILE = System.getProperty(PROFILE_PROPERTY, "").trim();
    private static final boolean ENABLED = PROFILE_ID.equals(REQUESTED_PROFILE);
 
    static {
