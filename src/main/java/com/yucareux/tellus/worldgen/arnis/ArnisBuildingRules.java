@@ -216,6 +216,10 @@ public final class ArnisBuildingRules {
       if (!shouldGenerateRooftopEquipment(blueprint) || boundaryDistance < 2) {
          return RooftopEquipment.NONE;
       }
+      if (blueprint.profile().archetype() == BuildingProfile.Archetype.TOWER
+         && boundaryDistance < blueprint.setbackForFloor(blueprint.floorCount() - 1) + 2) {
+         return RooftopEquipment.NONE;
+      }
       int localX = worldX - blueprint.minWorldX();
       int localZ = worldZ - blueprint.minWorldZ();
       if (localX <= 1 || localZ <= 1 || localX >= blueprint.width() - 2 || localZ >= blueprint.depth() - 2) {
@@ -327,7 +331,7 @@ public final class ArnisBuildingRules {
          return false;
       }
       BuildingProfile.BuildingCategory category = blueprint.profile().category();
-      return category == BuildingProfile.BuildingCategory.RESIDENTIAL || category == BuildingProfile.BuildingCategory.HOUSE;
+      return category == BuildingProfile.BuildingCategory.RESIDENTIAL;
    }
 
    private static boolean hasWindowInFloor(

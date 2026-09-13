@@ -109,7 +109,7 @@ class TellusBuildingStylesTest {
       TellusBuildingMaterials.BuildingMaterialPalette towerPalette = TellusBuildingMaterials.resolvePalette(towerProfile, towerStyle, 123L);
       int accentX = Math.floorMod(-towerStyle.accentPhase(), towerStyle.verticalAccentSpacing());
       assertEquals(towerPalette.window(), TellusBuildingMaterials.resolveLodFacadeBlock(blueprint, towerPalette, 0, accentX, 0, 5));
-      assertEquals(towerPalette.accent(), TellusBuildingMaterials.resolveLodFacadeBlock(blueprint, towerPalette, 0, 0, 0, 5));
+      assertEquals(towerPalette.trim(), TellusBuildingMaterials.resolveLodFacadeBlock(blueprint, towerPalette, 0, 0, 0, 5));
    }
 
    @Test

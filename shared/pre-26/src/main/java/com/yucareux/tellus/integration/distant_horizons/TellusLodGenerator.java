@@ -14,7 +14,6 @@ import com.yucareux.tellus.world.data.osm.BridgeSupportLayout;
 import com.yucareux.tellus.world.data.osm.OsmBuildingFeature;
 import com.yucareux.tellus.world.data.osm.OsmPerf;
 import com.yucareux.tellus.world.data.osm.OsmQueryMode;
-import com.yucareux.tellus.world.data.osm.OsmStreetLightFeature;
 import com.yucareux.tellus.world.data.osm.RoadAreaFeature;
 import com.yucareux.tellus.world.data.osm.RoadClass;
 import com.yucareux.tellus.world.data.osm.RoadFeature;
@@ -33,6 +32,7 @@ import com.yucareux.tellus.worldgen.EarthBiomeSource;
 import com.yucareux.tellus.worldgen.EarthChunkGenerator;
 import com.yucareux.tellus.worldgen.EarthGeneratorSettings;
 import com.yucareux.tellus.worldgen.EarthProjection;
+import com.yucareux.tellus.worldgen.road.StreetLightPlanner;
 import com.yucareux.tellus.worldgen.ExperimentalHeightSupport;
 import com.yucareux.tellus.worldgen.TellusWorldgenSources;
 import com.yucareux.tellus.worldgen.WaterSurfaceResolver;
@@ -111,10 +111,6 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
    private static final int ESA_BUILT_UP = 50;
    private static final int ESA_WATER = 80;
    private static final int ESA_MANGROVES = 95;
-   private static final double ROAD_LIGHT_BASE_SPACING_METERS = 40.0;
-   private static final int ROAD_LIGHT_MIN_SPACING_BLOCKS = 8;
-   private static final int ROAD_LIGHT_MIN_ROAD_WIDTH_BLOCKS = 2;
-   private static final double ROAD_LIGHT_EDGE_TOLERANCE_BLOCKS = 0.55;
    private static final int ROAD_LIGHT_BLOCK_LIGHT = 15;
    private static final int RANDOM_BIOME_TREE_CHANCE = 35;
    private static final long RANDOM_BIOME_TREE_SALT = -7163147898164839021L;
@@ -429,10 +425,10 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
          IDhApiBlockStateWrapper roadMarkingBlock = wrappers.getBlockState(Blocks.WHITE_CONCRETE.defaultBlockState());
          IDhApiBlockStateWrapper bridgeSupportShaftBlock = wrappers.getBlockState(Blocks.QUARTZ_PILLAR.defaultBlockState());
          IDhApiBlockStateWrapper bridgeSupportCapBlock = wrappers.getBlockState(Blocks.QUARTZ_BRICKS.defaultBlockState());
-         IDhApiBlockStateWrapper roadLightBaseBlock = wrappers.getBlockState(Blocks.STONE_BRICK_WALL.defaultBlockState());
-         IDhApiBlockStateWrapper roadLightFenceBlock = wrappers.getBlockState(Blocks.OAK_FENCE.defaultBlockState());
-         IDhApiBlockStateWrapper roadLightGlowBlock = wrappers.getBlockState(Blocks.GLOWSTONE.defaultBlockState());
-         IDhApiBlockStateWrapper roadLightCapBlock = wrappers.getBlockState(Blocks.SPRUCE_TRAPDOOR.defaultBlockState());
+         IDhApiBlockStateWrapper roadLightBaseBlock = wrappers.getBlockState(Blocks.POLISHED_DEEPSLATE_WALL.defaultBlockState());
+         IDhApiBlockStateWrapper roadLightPoleBlock = wrappers.getBlockState(Blocks.IRON_BARS.defaultBlockState());
+         IDhApiBlockStateWrapper roadLightGlowBlock = wrappers.getBlockState(Blocks.SEA_LANTERN.defaultBlockState());
+         IDhApiBlockStateWrapper roadLightCapBlock = wrappers.getBlockState(Blocks.IRON_TRAPDOOR.defaultBlockState());
          List<DhApiTerrainDataPoint> columnDataPoints = new ArrayList<>(12);
          int coverStride = coverSampleStride(detailLevel, lodSizePoints);
          boolean allowWaterVegetation = detail <= LOD_WATER_VEGETATION_MAX_DETAIL;
@@ -696,7 +692,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
          int[] bridgeSupportCapBottomMask = roadMaskResult.bridgeSupportCapBottomY();
          int[] bridgeSupportCapTopMask = roadMaskResult.bridgeSupportCapTopY();
          int[] roadLightBaseYMask = roadMaskResult.roadLightBaseY();
-         byte[] roadLightFenceCountMask = roadMaskResult.roadLightFenceCount();
+         byte[] roadLightPoleCountMask = roadMaskResult.roadLightPoleCount();
          int[] buildingFlattenedSurface = buildingMaskResult.flattenedSurface();
          boolean emitTimingEnabled = trace.isEnabled();
          long emitSurfaceResolveNanos = 0L;
@@ -1078,16 +1074,16 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
                      lastLayerTop = appendBuildingColumn(buildingColumn, lastLayerTop, minY, absoluteTop, wrappers, biome, columnDataPoints);
                   }
 
-                  if (roadLightBaseY != Integer.MIN_VALUE && !hasBuilding && !hasBridgeSupport) {
-                     int roadLightFenceCount = roadLightFenceCountMask == null ? 0 : Byte.toUnsignedInt(roadLightFenceCountMask[index]);
+                  if (roadLightBaseY != Integer.MIN_VALUE && !underwater && !hasRoad && !hasBuilding && !hasBridgeSupport) {
+                     int roadLightPoleCount = roadLightPoleCountMask == null ? 0 : Byte.toUnsignedInt(roadLightPoleCountMask[index]);
                      lastLayerTop = appendRoadLightColumn(
                         roadLightBaseY,
-                        roadLightFenceCount,
+                        roadLightPoleCount,
                         lastLayerTop,
                         minY,
                         absoluteTop,
                         roadLightBaseBlock,
-                        roadLightFenceBlock,
+                        roadLightPoleBlock,
                         roadLightGlowBlock,
                         roadLightCapBlock,
                         biome,
@@ -1749,54 +1745,14 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
       return true;
    }
 
-   private static int roadLightSpacingBlocks(double worldScale) {
-      if (!(worldScale > 0.0)) {
-         return 40;
-      } else {
-         return Mth.clamp((int)Math.round(ROAD_LIGHT_BASE_SPACING_METERS / worldScale), ROAD_LIGHT_MIN_SPACING_BLOCKS, 40);
-      }
-   }
-
-   private static int roadLightMinimumSpacingBlocks(int spacingBlocks) {
-      return Math.max(3, (int)Math.round(spacingBlocks * 0.75));
-   }
-
-   private static int roadLightFenceCount(double worldScale) {
-      if (worldScale <= 3.0) {
-         return 3;
-      } else {
-         return worldScale <= 8.0 ? 2 : 1;
-      }
-   }
-
-   private static TellusLodGenerator.SampledRoadStation sampleRoadStation(
-      double[] worldXs, double[] worldZs, double[] segmentStarts, double[] segmentLengths, double station
-   ) {
-      for (int i = 0; i < segmentLengths.length; i++) {
-         double segmentLength = segmentLengths[i];
-         if (!(segmentLength <= 1.0E-6)) {
-            double segmentStart = segmentStarts[i];
-            double segmentEnd = segmentStart + segmentLength;
-            if (station <= segmentEnd + 1.0E-6 || i == segmentLengths.length - 1) {
-               double dx = worldXs[i + 1] - worldXs[i];
-               double dz = worldZs[i + 1] - worldZs[i];
-               double t = Mth.clamp((station - segmentStart) / segmentLength, 0.0, 1.0);
-               return new TellusLodGenerator.SampledRoadStation(worldXs[i] + dx * t, worldZs[i] + dz * t, dx / segmentLength, dz / segmentLength);
-            }
-         }
-      }
-
-      return null;
-   }
-
    private static int appendRoadLightColumn(
       int baseY,
-      int fenceCount,
+      int poleCount,
       int lastLayerTop,
       int minY,
       int absoluteTop,
       IDhApiBlockStateWrapper baseBlock,
-      IDhApiBlockStateWrapper fenceBlock,
+      IDhApiBlockStateWrapper poleBlock,
       IDhApiBlockStateWrapper glowBlock,
       IDhApiBlockStateWrapper capBlock,
       IDhApiBiomeWrapper biome,
@@ -1809,19 +1765,19 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
          layerTop = wallTop;
       }
 
-      int fenceTop = toLayerTop(baseY + fenceCount + 1, minY, absoluteTop);
-      if (fenceTop > layerTop) {
-         columnDataPoints.add(DhApiTerrainDataPoint.create((byte)0, 0, 15, layerTop, fenceTop, fenceBlock, biome));
-         layerTop = fenceTop;
+      int poleTop = toLayerTop(baseY + poleCount + 1, minY, absoluteTop);
+      if (poleTop > layerTop) {
+         columnDataPoints.add(DhApiTerrainDataPoint.create((byte)0, 0, 15, layerTop, poleTop, poleBlock, biome));
+         layerTop = poleTop;
       }
 
-      int glowTop = toLayerTop(baseY + fenceCount + 2, minY, absoluteTop);
+      int glowTop = toLayerTop(baseY + poleCount + 2, minY, absoluteTop);
       if (glowTop > layerTop) {
          columnDataPoints.add(DhApiTerrainDataPoint.create((byte)0, ROAD_LIGHT_BLOCK_LIGHT, 15, layerTop, glowTop, glowBlock, biome));
          layerTop = glowTop;
       }
 
-      int capTop = toLayerTop(baseY + fenceCount + 3, minY, absoluteTop);
+      int capTop = toLayerTop(baseY + poleCount + 3, minY, absoluteTop);
       if (capTop > layerTop) {
          columnDataPoints.add(DhApiTerrainDataPoint.create((byte)0, ROAD_LIGHT_BLOCK_LIGHT, 15, layerTop, capTop, capBlock, biome));
          layerTop = capTop;
@@ -2146,7 +2102,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
                }
             }
 
-            if (!hasRoadCoverage) {
+            if (!hasRoadCoverage && (cellSize > 2 || settings.worldScale() > StreetLightPlanner.MAX_SCALE)) {
                OsmPerf.recordDhRoadMaskBuild(OsmPerf.elapsedSince(buildStartNs), roads.size());
                return new TellusLodGenerator.LodRoadMaskResult(null, null, null, null, null, null, null, null, hadCacheMisses);
             } else {
@@ -2159,7 +2115,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
                int[] bridgeSupportCapTopY = null;
                boolean hasRoadLights = false;
                int[] roadLightBaseY = null;
-               byte[] roadLightFenceCount = null;
+               byte[] roadLightPoleCount = null;
                if (!mainBridgeRoads.isEmpty() || !normalBridgeRoads.isEmpty() || !dirtBridgeRoads.isEmpty()) {
                   bridgeDeckY = new int[selectedClass.length];
                   Arrays.fill(bridgeDeckY, Integer.MIN_VALUE);
@@ -2256,104 +2212,32 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
                   }
                }
 
-               int roadLightSpacing = roadLightSpacingBlocks(settings.worldScale());
-               if (cellSize <= roadLightSpacing) {
+               if (cellSize <= 2 && settings.worldScale() <= StreetLightPlanner.MAX_SCALE) {
                   roadLightBaseY = new int[selectedClass.length];
-                  roadLightFenceCount = new byte[selectedClass.length];
+                  roadLightPoleCount = new byte[selectedClass.length];
                   Arrays.fill(roadLightBaseY, Integer.MIN_VALUE);
-                  boolean[] occupiedLightCells = new boolean[selectedClass.length];
-                  IntArrayList occupiedLightIndices = new IntArrayList();
                   EarthChunkGenerator.OsmStreetLightQueryResult streetLightQuery = this.generator
-                     .fetchOsmStreetLightsForAreaDetailed(minWorldX, minWorldZ, maxWorldX, maxWorldZ, 8, fetchMode);
+                     .fetchOsmStreetLightsForAreaDetailed(minWorldX, minWorldZ, maxWorldX, maxWorldZ,
+                        StreetLightPlanner.CONTEXT_MARGIN, fetchMode);
                   hadCacheMisses |= streetLightQuery.hadCacheMisses();
-                  hasRoadLights = this.rasterizeLodExactRoadLights(
-                     streetLightQuery.features(),
-                     blocksPerDegree,
-                     settings.worldScale(),
-                     worldXs,
-                     worldZs,
-                     surfaceYs,
-                     lodSizePoints,
-                     cellSize,
-                     selectedClass,
-                     bridgeDeckY,
-                     bridgeSupportShaftBottomY,
-                     bridgeSupportShaftTopY,
-                     bridgeSupportCapBottomY,
-                     bridgeSupportCapTopY,
-                     buildingColumns,
-                     roadLightBaseY,
-                     roadLightFenceCount,
-                     occupiedLightCells,
-                     occupiedLightIndices
-                  );
-                  hasRoadLights |= this.rasterizeLodRoadLights(
-                     mainRoads,
-                     (byte)1,
-                     mainRoadWidth,
-                     blocksPerDegree,
-                     worldXs,
-                     worldZs,
-                     surfaceYs,
-                     lodSizePoints,
-                     cellSize,
-                     selectedClass,
-                     bridgeDeckY,
-                     bridgeSupportShaftBottomY,
-                     bridgeSupportShaftTopY,
-                     bridgeSupportCapBottomY,
-                     bridgeSupportCapTopY,
-                     buildingColumns,
-                     roadLightBaseY,
-                     roadLightFenceCount,
-                     occupiedLightCells,
-                     occupiedLightIndices
-                  );
-                  if (!mainRoadsOnly) {
-                     hasRoadLights |= this.rasterizeLodRoadLights(
-                        normalRoads,
-                        (byte)2,
-                        normalRoadWidth,
-                        blocksPerDegree,
-                        worldXs,
-                        worldZs,
-                        surfaceYs,
-                        lodSizePoints,
-                        cellSize,
-                        selectedClass,
-                        bridgeDeckY,
-                        bridgeSupportShaftBottomY,
-                        bridgeSupportShaftTopY,
-                        bridgeSupportCapBottomY,
-                        bridgeSupportCapTopY,
-                        buildingColumns,
-                        roadLightBaseY,
-                        roadLightFenceCount,
-                        occupiedLightCells,
-                        occupiedLightIndices
-                     );
-                     hasRoadLights |= this.rasterizeLodRoadLights(
-                        dirtRoads,
-                        (byte)3,
-                        dirtRoadWidth,
-                        blocksPerDegree,
-                        worldXs,
-                        worldZs,
-                        surfaceYs,
-                        lodSizePoints,
-                        cellSize,
-                        selectedClass,
-                        bridgeDeckY,
-                        bridgeSupportShaftBottomY,
-                        bridgeSupportShaftTopY,
-                        bridgeSupportCapBottomY,
-                        bridgeSupportCapTopY,
-                        buildingColumns,
-                        roadLightBaseY,
-                        roadLightFenceCount,
-                        occupiedLightCells,
-                        occupiedLightIndices
-                     );
+                  var lamps = StreetLightPlanner.plan(roads, streetLightQuery.features(), settings.worldScale(),
+                     mainRoadWidth, normalRoadWidth, dirtRoadWidth, minWorldX, minWorldZ, maxWorldX, maxWorldZ);
+                  for (StreetLightPlanner.Lamp lamp : lamps) {
+                     int gridX = (int)Math.round((lamp.worldX() - worldXs[0]) / (double)cellSize);
+                     int gridZ = (int)Math.round((lamp.worldZ() - worldZs[0]) / (double)cellSize);
+                     if (gridX < 0 || gridX >= lodSizePoints || gridZ < 0 || gridZ >= lodSizePoints) continue;
+                     int index = gridZ * lodSizePoints + gridX;
+                     // Coarse cells may cover both sidewalk and asphalt. Omit the pole instead of moving it into traffic.
+                     if (selectedClass[index] > 0 || roadLightBaseY[index] != Integer.MIN_VALUE) continue;
+                     int baseY = surfaceYs[index];
+                     int topY = baseY + lamp.height() + 1;
+                     if (buildingColumns != null && buildingColumns[index] != null
+                        || lodSlopeDiff(surfaceYs, lodSizePoints, gridX, gridZ, cellSize) > 2
+                        || lodRoadLightBridgeSupportConflicts(index, baseY + 1, topY, bridgeSupportShaftBottomY,
+                           bridgeSupportShaftTopY, bridgeSupportCapBottomY, bridgeSupportCapTopY)) continue;
+                     roadLightBaseY[index] = baseY;
+                     roadLightPoleCount[index] = (byte)(lamp.height() - 2);
+                     hasRoadLights = true;
                   }
                }
 
@@ -2368,7 +2252,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
                   hasBridgeSupport ? bridgeSupportCapBottomY : null,
                   hasBridgeSupport ? bridgeSupportCapTopY : null,
                   hasRoadLights ? roadLightBaseY : null,
-                  hasRoadLights ? roadLightFenceCount : null,
+                  hasRoadLights ? roadLightPoleCount : null,
                   hadCacheMisses
                );
             }
@@ -3115,366 +2999,6 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
                }
             }
          }
-      }
-   }
-
-   private boolean rasterizeLodExactRoadLights(
-      List<OsmStreetLightFeature> streetLights,
-      double blocksPerDegree,
-      double worldScale,
-      int[] worldXs,
-      int[] worldZs,
-      int[] surfaceYs,
-      int lodSizePoints,
-      int cellSize,
-      byte[] selectedClass,
-      int[] bridgeDeckY,
-      int[] bridgeSupportShaftBottomY,
-      int[] bridgeSupportShaftTopY,
-      int[] bridgeSupportCapBottomY,
-      int[] bridgeSupportCapTopY,
-      TellusLodGenerator.LodBuildingColumn[] buildingColumns,
-      int[] roadLightBaseY,
-      byte[] roadLightFenceCount,
-      boolean[] occupiedLightCells,
-      IntArrayList occupiedLightIndices
-   ) {
-      if (streetLights == null || streetLights.isEmpty() || lodSizePoints <= 0 || cellSize <= 0) {
-         return false;
-      }
-
-      int spacingBlocks = roadLightSpacingBlocks(worldScale);
-      int minLampSpacingBlocks = roadLightMinimumSpacingBlocks(spacingBlocks);
-      int fenceCount = roadLightFenceCount(worldScale);
-      double minWorldX = Math.min(worldXs[0], worldXs[lodSizePoints - 1]);
-      double minWorldZ = Math.min(worldZs[0], worldZs[lodSizePoints - 1]);
-      boolean hasRoadLights = false;
-
-      for (OsmStreetLightFeature streetLight : streetLights) {
-         double lampX = streetLight.longitude() * blocksPerDegree;
-         double lampZ = EarthProjection.latToBlockZ(streetLight.latitude(), worldScale);
-         int anchorIndex = findLodExactRoadLightAnchor(lampX, lampZ, worldXs, worldZs, lodSizePoints, cellSize, minWorldX, minWorldZ, selectedClass);
-         if (anchorIndex < 0 || occupiedLightCells[anchorIndex] || hasNearbyLodRoadLight(anchorIndex, worldXs, worldZs, minLampSpacingBlocks, occupiedLightIndices)) {
-            continue;
-         }
-
-         int baseY = bridgeDeckY != null && bridgeDeckY[anchorIndex] != Integer.MIN_VALUE ? bridgeDeckY[anchorIndex] : surfaceYs[anchorIndex];
-         int minLampY = baseY + 1;
-         int maxLampY = baseY + fenceCount + 3;
-         TellusLodGenerator.LodBuildingColumn buildingColumn = buildingColumns == null ? null : buildingColumns[anchorIndex];
-         if ((buildingColumn == null || !buildingColumn.intersectsSpan(minLampY, maxLampY))
-            && !lodRoadLightBridgeSupportConflicts(
-               anchorIndex, minLampY, maxLampY, bridgeSupportShaftBottomY, bridgeSupportShaftTopY, bridgeSupportCapBottomY, bridgeSupportCapTopY
-            )) {
-            roadLightBaseY[anchorIndex] = baseY;
-            roadLightFenceCount[anchorIndex] = (byte)fenceCount;
-            occupiedLightCells[anchorIndex] = true;
-            occupiedLightIndices.add(anchorIndex);
-            hasRoadLights = true;
-         }
-      }
-
-      return hasRoadLights;
-   }
-
-   private static int findLodExactRoadLightAnchor(
-      double lampX,
-      double lampZ,
-      int[] worldXs,
-      int[] worldZs,
-      int lodSizePoints,
-      int cellSize,
-      double minWorldX,
-      double minWorldZ,
-      byte[] selectedClass
-   ) {
-      double scanRadius = 5.0 + cellSize;
-      int minGridX = Mth.clamp((int)Math.floor((lampX - scanRadius - minWorldX) / cellSize), 0, lodSizePoints - 1);
-      int maxGridX = Mth.clamp((int)Math.floor((lampX + scanRadius - minWorldX) / cellSize), 0, lodSizePoints - 1);
-      int minGridZ = Mth.clamp((int)Math.floor((lampZ - scanRadius - minWorldZ) / cellSize), 0, lodSizePoints - 1);
-      int maxGridZ = Mth.clamp((int)Math.floor((lampZ + scanRadius - minWorldZ) / cellSize), 0, lodSizePoints - 1);
-      double maxDistanceSq = scanRadius * scanRadius;
-      int bestIndex = -1;
-      int bestBoundary = -1;
-      double bestDistanceSq = Double.POSITIVE_INFINITY;
-
-      for (int gz = minGridZ; gz <= maxGridZ; gz++) {
-         double sampleZ = worldZs[gz];
-         int row = gz * lodSizePoints;
-
-         for (int gx = minGridX; gx <= maxGridX; gx++) {
-            int index = row + gx;
-            if (selectedClass[index] <= 0) {
-               continue;
-            }
-
-            int boundary = lodRoadBoundaryScore(gx, gz, lodSizePoints, selectedClass);
-            if (boundary <= 0) {
-               continue;
-            }
-
-            double dx = worldXs[gx] - lampX;
-            double dz = sampleZ - lampZ;
-            double distanceSq = dx * dx + dz * dz;
-            if (distanceSq <= maxDistanceSq && (boundary > bestBoundary || boundary == bestBoundary && distanceSq < bestDistanceSq)) {
-               bestBoundary = boundary;
-               bestDistanceSq = distanceSq;
-               bestIndex = index;
-            }
-         }
-      }
-
-      return bestIndex;
-   }
-
-   private static int lodRoadBoundaryScore(int gridX, int gridZ, int lodSizePoints, byte[] selectedClass) {
-      int index = gridZ * lodSizePoints + gridX;
-      if (selectedClass[index] <= 0) {
-         return 0;
-      }
-
-      int score = 0;
-      if (gridX <= 0 || selectedClass[index - 1] == 0) {
-         score++;
-      }
-      if (gridX >= lodSizePoints - 1 || selectedClass[index + 1] == 0) {
-         score++;
-      }
-      if (gridZ <= 0 || selectedClass[index - lodSizePoints] == 0) {
-         score++;
-      }
-      if (gridZ >= lodSizePoints - 1 || selectedClass[index + lodSizePoints] == 0) {
-         score++;
-      }
-
-      return score;
-   }
-
-   private boolean rasterizeLodRoadLights(
-      List<RoadFeature> roads,
-      byte classId,
-      int roadWidth,
-      double blocksPerDegree,
-      int[] worldXs,
-      int[] worldZs,
-      int[] surfaceYs,
-      int lodSizePoints,
-      int cellSize,
-      byte[] selectedClass,
-      int[] bridgeDeckY,
-      int[] bridgeSupportShaftBottomY,
-      int[] bridgeSupportShaftTopY,
-      int[] bridgeSupportCapBottomY,
-      int[] bridgeSupportCapTopY,
-      TellusLodGenerator.LodBuildingColumn[] buildingColumns,
-      int[] roadLightBaseY,
-      byte[] roadLightFenceCount,
-      boolean[] occupiedLightCells,
-      IntArrayList occupiedLightIndices
-   ) {
-      if (roads.isEmpty() || roadWidth < ROAD_LIGHT_MIN_ROAD_WIDTH_BLOCKS || lodSizePoints <= 0 || cellSize <= 0) {
-         return false;
-      } else {
-         double worldScale = EarthProjection.worldScaleFromBlocksPerDegree(blocksPerDegree);
-         int spacingBlocks = roadLightSpacingBlocks(worldScale);
-         int minLampSpacingBlocks = roadLightMinimumSpacingBlocks(spacingBlocks);
-         int fenceCount = roadLightFenceCount(worldScale);
-         double minWorldX = Math.min(worldXs[0], worldXs[lodSizePoints - 1]);
-         double minWorldZ = Math.min(worldZs[0], worldZs[lodSizePoints - 1]);
-         boolean hasRoadLights = false;
-
-         for (RoadFeature road : roads) {
-            if (road.mode() == RoadMode.TUNNEL) {
-               continue;
-            }
-
-            int featureRoadWidth = RoadSurfaceStyle.effectiveRoadWidth(road, roadWidth, worldScale);
-            if (featureRoadWidth < ROAD_LIGHT_MIN_ROAD_WIDTH_BLOCKS) {
-               continue;
-            }
-
-            int segmentCount = road.pointCount() - 1;
-            if (segmentCount <= 0) {
-               continue;
-            }
-
-            double[] roadWorldXs = new double[road.pointCount()];
-            double[] roadWorldZs = new double[road.pointCount()];
-            double[] segmentStarts = new double[segmentCount];
-            double[] segmentLengths = new double[segmentCount];
-
-            for (int i = 0; i < road.pointCount(); i++) {
-               roadWorldXs[i] = road.lonAt(i) * blocksPerDegree;
-               roadWorldZs[i] = EarthProjection.latToBlockZ(road.latAt(i), worldScale);
-            }
-
-            double totalLength = 0.0;
-            for (int i = 0; i < segmentCount; i++) {
-               double dx = roadWorldXs[i + 1] - roadWorldXs[i];
-               double dz = roadWorldZs[i + 1] - roadWorldZs[i];
-               segmentStarts[i] = totalLength;
-               segmentLengths[i] = Math.sqrt(dx * dx + dz * dz);
-               totalLength += segmentLengths[i];
-            }
-
-            double endpointInset = Math.max(Math.max(4.0, featureRoadWidth), spacingBlocks * 0.75);
-            if (!(totalLength > endpointInset * 2.0)) {
-               continue;
-            }
-
-            boolean placeLeft = true;
-            for (double station = endpointInset; station <= totalLength - endpointInset + 1.0E-6; station += spacingBlocks) {
-               TellusLodGenerator.SampledRoadStation sampled = sampleRoadStation(roadWorldXs, roadWorldZs, segmentStarts, segmentLengths, station);
-               if (sampled == null) {
-                  placeLeft = !placeLeft;
-                  continue;
-               }
-
-               int anchorIndex = findLodRoadLightAnchor(
-                  sampled,
-                  placeLeft,
-                  featureRoadWidth,
-                  classId,
-                  road.mode(),
-                  worldXs,
-                  worldZs,
-                  lodSizePoints,
-                  cellSize,
-                  minWorldX,
-                  minWorldZ,
-                  selectedClass,
-                  bridgeDeckY
-               );
-               if (anchorIndex >= 0
-                  && !occupiedLightCells[anchorIndex]
-                  && !hasNearbyLodRoadLight(anchorIndex, worldXs, worldZs, minLampSpacingBlocks, occupiedLightIndices)) {
-                  int baseY = road.mode() == RoadMode.BRIDGE && bridgeDeckY != null && bridgeDeckY[anchorIndex] != Integer.MIN_VALUE
-                     ? bridgeDeckY[anchorIndex]
-                     : surfaceYs[anchorIndex];
-                  int minLampY = baseY + 1;
-                  int maxLampY = baseY + fenceCount + 3;
-                  TellusLodGenerator.LodBuildingColumn buildingColumn = buildingColumns == null ? null : buildingColumns[anchorIndex];
-                  if ((buildingColumn == null || !buildingColumn.intersectsSpan(minLampY, maxLampY))
-                     && !lodRoadLightBridgeSupportConflicts(
-                        anchorIndex, minLampY, maxLampY, bridgeSupportShaftBottomY, bridgeSupportShaftTopY, bridgeSupportCapBottomY, bridgeSupportCapTopY
-                     )) {
-                     roadLightBaseY[anchorIndex] = baseY;
-                     roadLightFenceCount[anchorIndex] = (byte)fenceCount;
-                     occupiedLightCells[anchorIndex] = true;
-                     occupiedLightIndices.add(anchorIndex);
-                     hasRoadLights = true;
-                  }
-               }
-
-               placeLeft = !placeLeft;
-            }
-         }
-
-         return hasRoadLights;
-      }
-   }
-
-   private static int findLodRoadLightAnchor(
-      TellusLodGenerator.SampledRoadStation sampled,
-      boolean placeLeft,
-      int roadWidth,
-      byte classId,
-      RoadMode roadMode,
-      int[] worldXs,
-      int[] worldZs,
-      int lodSizePoints,
-      int cellSize,
-      double minWorldX,
-      double minWorldZ,
-      byte[] selectedClass,
-      int[] bridgeDeckY
-   ) {
-      double normalX = placeLeft ? -sampled.tangentZ() : sampled.tangentZ();
-      double normalZ = placeLeft ? sampled.tangentX() : -sampled.tangentX();
-      double scanRadius = Math.max(cellSize + 1.0, roadWidth + cellSize);
-      double alongTolerance = Math.max(cellSize * 0.6, roadWidth * 0.45 + cellSize * 0.25);
-      double minimumEdgeLateral = Math.max(cellSize * 0.25, Math.max(cellSize * 0.5, (roadWidth - 1) * 0.5) - ROAD_LIGHT_EDGE_TOLERANCE_BLOCKS);
-      int minGridX = Mth.clamp((int)Math.floor((sampled.worldX() - scanRadius - minWorldX) / cellSize), 0, lodSizePoints - 1);
-      int maxGridX = Mth.clamp((int)Math.floor((sampled.worldX() + scanRadius - minWorldX) / cellSize), 0, lodSizePoints - 1);
-      int minGridZ = Mth.clamp((int)Math.floor((sampled.worldZ() - scanRadius - minWorldZ) / cellSize), 0, lodSizePoints - 1);
-      int maxGridZ = Mth.clamp((int)Math.floor((sampled.worldZ() + scanRadius - minWorldZ) / cellSize), 0, lodSizePoints - 1);
-      int bestIndex = -1;
-      double bestLateral = Double.NEGATIVE_INFINITY;
-      double bestAlong = Double.POSITIVE_INFINITY;
-      double bestDistanceSq = Double.POSITIVE_INFINITY;
-      double minLateral = Double.POSITIVE_INFINITY;
-      double maxLateral = Double.NEGATIVE_INFINITY;
-
-      for (int gz = minGridZ; gz <= maxGridZ; gz++) {
-         double sampleZ = worldZs[gz];
-         int row = gz * lodSizePoints;
-
-         for (int gx = minGridX; gx <= maxGridX; gx++) {
-            int index = row + gx;
-            boolean bridgeCell = bridgeDeckY != null && bridgeDeckY[index] != Integer.MIN_VALUE;
-            boolean modeMatches = roadMode == RoadMode.BRIDGE ? bridgeCell : !bridgeCell;
-            if (selectedClass[index] == classId && modeMatches) {
-               double dx = worldXs[gx] - sampled.worldX();
-               double dz = sampleZ - sampled.worldZ();
-               double along = dx * sampled.tangentX() + dz * sampled.tangentZ();
-               if (!(Math.abs(along) > alongTolerance)) {
-                  double lateral = dx * normalX + dz * normalZ;
-                  minLateral = Math.min(minLateral, lateral);
-                  maxLateral = Math.max(maxLateral, lateral);
-                  if (!(lateral < minimumEdgeLateral)) {
-                     double distanceSq = dx * dx + dz * dz;
-                     double absAlong = Math.abs(along);
-                     if (lateral > bestLateral + 1.0E-6
-                        || Math.abs(lateral - bestLateral) <= 1.0E-6 && absAlong < bestAlong - 1.0E-6
-                        || Math.abs(lateral - bestLateral) <= 1.0E-6 && Math.abs(absAlong - bestAlong) <= 1.0E-6 && distanceSq < bestDistanceSq) {
-                        bestLateral = lateral;
-                        bestAlong = absAlong;
-                        bestDistanceSq = distanceSq;
-                        bestIndex = index;
-                     }
-                  }
-               }
-            }
-         }
-      }
-
-      if (bestIndex < 0 || minLateral == Double.POSITIVE_INFINITY || maxLateral == Double.NEGATIVE_INFINITY) {
-         return -1;
-      }
-
-      double span = maxLateral - minLateral;
-      if (span > roadWidth + cellSize * 0.75) {
-         return -1;
-      }
-
-      return bestIndex;
-   }
-
-   private static boolean hasNearbyLodRoadLight(
-      int anchorIndex, int[] worldXs, int[] worldZs, int minSpacingBlocks, IntArrayList occupiedLightIndices
-   ) {
-      if (occupiedLightIndices == null || occupiedLightIndices.isEmpty()) {
-         return false;
-      } else {
-         int gridSize = worldXs.length;
-         int anchorX = anchorIndex % gridSize;
-         int anchorZ = anchorIndex / gridSize;
-         int anchorWorldX = worldXs[anchorX];
-         int anchorWorldZ = worldZs[anchorZ];
-         int minSpacingSq = minSpacingBlocks * minSpacingBlocks;
-
-         for (int i = 0; i < occupiedLightIndices.size(); i++) {
-            int occupiedIndex = occupiedLightIndices.getInt(i);
-            int occupiedX = occupiedIndex % gridSize;
-            int occupiedZ = occupiedIndex / gridSize;
-            int dx = worldXs[occupiedX] - anchorWorldX;
-            int dz = worldZs[occupiedZ] - anchorWorldZ;
-            if (dx * dx + dz * dz < minSpacingSq) {
-               return true;
-            }
-         }
-
-         return false;
       }
    }
 
@@ -5461,7 +4985,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
       int[] bridgeSupportCapBottomY,
       int[] bridgeSupportCapTopY,
       int[] roadLightBaseY,
-      byte[] roadLightFenceCount,
+      byte[] roadLightPoleCount,
       boolean hadCacheMisses
    ) {
       private LodRoadMaskResult(
@@ -5473,7 +4997,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
          int[] bridgeSupportCapBottomY,
          int[] bridgeSupportCapTopY,
          int[] roadLightBaseY,
-         byte[] roadLightFenceCount,
+         byte[] roadLightPoleCount,
          boolean hadCacheMisses
       ) {
          this(
@@ -5486,7 +5010,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
             bridgeSupportCapBottomY,
             bridgeSupportCapTopY,
             roadLightBaseY,
-            roadLightFenceCount,
+            roadLightPoleCount,
             hadCacheMisses
          );
       }
@@ -5499,7 +5023,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
          int[] bridgeSupportCapBottomY,
          int[] bridgeSupportCapTopY,
          int[] roadLightBaseY,
-         byte[] roadLightFenceCount,
+         byte[] roadLightPoleCount,
          boolean hadCacheMisses
       ) {
          this(
@@ -5512,7 +5036,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
             bridgeSupportCapBottomY,
             bridgeSupportCapTopY,
             roadLightBaseY,
-            roadLightFenceCount,
+            roadLightPoleCount,
             hadCacheMisses
          );
       }
@@ -5548,8 +5072,6 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
    ) {
    }
 
-   private record SampledRoadStation(double worldX, double worldZ, double tangentX, double tangentZ) {
-   }
 
    private static final class LodBuildingColumn {
       private int[] starts = new int[2];

@@ -25,6 +25,12 @@ Server support note: Tellus must be installed on the server, but is not required
 - Distant Horizons integration for long-distance terrain rendering
 - In-game map teleport UI for choosing real-world locations
 
+Houses use coordinated facades, framed windows, entrance canopies, and pitched roofs with enclosed attic space. High rises have a wider podium, aligned window bays, and upper setbacks that preserve usable floors. At 1:1 world scale, interiors use footprint-aware rooms, clear door approaches, furnished living and work areas, and continuous stairs with landings, guardrails, and floor openings. Very small multi-storey footprints use a ladder when a complete staircase cannot fit. These changes apply to newly generated chunks; existing buildings are not rebuilt automatically.
+
+Entrances are selected on the rasterized footprint and must connect to the main interior. Doorways favor accessible street-facing walls, keep clear of neighboring buildings and enclosed courtyards, and reserve a passage through recessed or angled facades. Trim, furniture and stairs stay out of that passage. Small landings and steps connect the threshold to uneven outside ground. At 1:1 scale, all chunks of a building use the same foundation samples to keep floor heights aligned.
+
+Street lighting uses steel poles, flat cantilever arms, and white light fixtures. Pedestrian streets get compact post lights; local streets use a regular row along one verge; collectors use alternating sides; wide boulevards use opposite pairs. Motorways and rural paths only receive mapped lights. Pole positions follow the complete road geometry, stay outside travel lanes and junction approaches, and remain consistent across chunk boundaries. Mapped lights take priority over generated ones. Whole fixtures are checked for ground support, water, buildings, and walking clearance before placement. Individual lamps are omitted above 1:8 scale; Distant Horizons uses the same layout at its finest detail levels. Existing generated chunks retain their previous lights.
+
 ## Third-Party Code
 
 Tellus includes code derived from Arnis.
@@ -69,7 +75,7 @@ These options are available in the "Customize World Generation" screen when crea
 - **Height Offset**: Shifts all terrain up or down by a fixed number of blocks. Use this to raise or lower the entire world.
 - **Max Altitude**: Upper world limit in blocks. Set to Automatic to let Tellus compute a safe cap based on your scale settings.
 - **Min Altitude**: Lower world limit in blocks. Set to Automatic to let Tellus compute a safe floor based on your scale settings.
-- **Water**: Uses Overture Maps `ocean`/`sea` polygons as the sole ocean and coastline authority. Rivers and lakes retain their own Overture feature kinds, and ocean floors use OpenWaters bathymetry with a corrective coastal safety ramp.
+- **Water**: Uses Overture Maps `subtype=ocean` surface polygons as the sole ocean and coastline authority. Physical sea and ocean labels do not generate water. Rivers and lakes retain their own Overture feature kinds, and ocean floors use OpenWaters bathymetry with a corrective coastal safety ramp.
 
 ### Ecological Settings (work in progress)
 These options are currently locked and not adjustable yet. They describe what will be configurable in a future update.
@@ -141,7 +147,7 @@ This section lets you toggle vanilla structures and world features on or off, su
 - https://www.arcgis.com/home/item.html?id=2a3dfb00c2c6425f85bd70da420d58eb
 
 ### Overture Maps water
-- Overture Maps base-theme water features provide inland-water geometry and definitive `ocean`/`sea` coastline polygons.
+- Overture Maps base-theme water features provide inland-water geometry and definitive `subtype=ocean` coastline polygons. Physical labels (`subtype=physical`, including named seas, oceans, and bays) are excluded because their polygons can cover islands; waterfall point markers remain available for terrain protection.
 - Ocean classification does not use Mapterhorn elevation, land-mask state, or an elevation-at-or-below-zero heuristic.
 - Complete empty vector tiles are valid dry coverage. Pending or failed coverage is kept non-cacheable so temporary source failures cannot become permanent dry seams.
 - https://docs.overturemaps.org/attribution/
@@ -165,7 +171,7 @@ This section lets you toggle vanilla structures and world features on or off, su
 - Project: https://github.com/openwatersio/seascape
 - Tiles: https://tiles.openwaters.io/seascape/
 - License: CC BY 4.0 for the published tile compilation.
-- In-game processing: Overture `ocean` and `sea` polygons define ocean membership independently of either elevation source. OpenWaters Terrarium pixels are bilinearly sampled at a zoom selected for the requested world/LOD resolution. Negative elevations are scaled by the oceanic height scale; zero or positive samples remain ocean and are clamped to a one-block minimum depth. Deterministic fallback bathymetry is used only when OpenWaters is unavailable.
+- In-game processing: Overture `subtype=ocean` surface polygons define ocean membership independently of either elevation source. OpenWaters Terrarium pixels are bilinearly sampled at a zoom selected for the requested world/LOD resolution. Negative elevations are scaled by the oceanic height scale; zero or positive samples remain ocean and are clamped to a one-block minimum depth. Deterministic fallback bathymetry is used only when OpenWaters is unavailable.
 - Coastal safety: naturally shallow OpenWaters profiles are preserved. Abrupt, invalid, or missing profiles receive a smooth one-block-to-raw-depth ramp over 512 blocks by default. Configure it with `tellus.water.oceanFloorTransitionBlocks` (`0..2048`); DH inherits this unless `tellus.dhWaterOceanFloorTransitionBlocks` is supplied. The 512-block Overture coastline macro-tile cache defaults to 32 entries and can be set with `tellus.oceanCoastCacheTiles` (`4..256`).
 - DH renders the raw profiled ocean floor by default so deep-water variation remains continuous. Legacy logarithmic depth compression is opt-in through `tellus.dhWaterOceanDepthCompressionEnabled=true` and no longer uses a fixed maximum-depth plateau.
 - When raw bathymetry is deeper than the dimension permits, Tellus now fits it monotonically into the available vertical range instead of clamping every sample to the same bottom Y. Ocean floors reserve eight solid support blocks above the world minimum, configurable with `tellus.water.oceanFloorSupportBlocks` (`2..32`).

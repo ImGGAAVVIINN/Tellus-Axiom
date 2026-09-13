@@ -103,7 +103,7 @@ public final class TellusBuildingStyles {
          case GENERIC -> BuildingStyle.GroundFloorTreatment.PLAIN;
       };
       BuildingStyle.BalconyProfile balcony = switch (category) {
-         case HOUSE -> profile.floorCount() > 1 && !compact ? BuildingStyle.BalconyProfile.LIGHT : BuildingStyle.BalconyProfile.NONE;
+         case HOUSE -> BuildingStyle.BalconyProfile.NONE;
          case RESIDENTIAL -> positiveMod(mixedSeed, 4) == 0 ? BuildingStyle.BalconyProfile.FIRE_ESCAPE : BuildingStyle.BalconyProfile.LIGHT;
          case HOTEL -> positiveMod(mixedSeed, 3) == 0 ? BuildingStyle.BalconyProfile.LIGHT : BuildingStyle.BalconyProfile.NONE;
          default -> BuildingStyle.BalconyProfile.NONE;
