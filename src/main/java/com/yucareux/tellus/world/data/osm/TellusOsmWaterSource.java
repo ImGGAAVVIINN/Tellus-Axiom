@@ -345,7 +345,6 @@ public final class TellusOsmWaterSource implements TellusCacheHandle {
       if (!this.available) {
          return OsmWaterTile.empty();
       } else {
-         TellusOsmWaterSource.TileGeoBounds bounds = tileBounds(key);
          Path cachePath = this.cachePathFor(key);
          Path parsedCachePath = this.parsedCachePathFor(key);
          if (Files.exists(parsedCachePath)) {
@@ -368,7 +367,7 @@ public final class TellusOsmWaterSource implements TellusCacheHandle {
          if (Files.exists(cachePath)) {
             try {
                byte[] payload = this.readCompressed(cachePath);
-               OsmWaterTile parsed = this.parseVectorTile(payload, bounds, key);
+               OsmWaterTile parsed = parseVectorTile(payload, key.zoom(), key.x(), key.y());
                this.cacheParsedTile(parsedCachePath, parsed);
                this.tileLoadFailures.remove(key);
                OsmPerf.recordTileLoad(OsmPerf.TileSource.OSM_WATER, OsmPerf.TileLoadPath.RAW_DISK);
@@ -392,7 +391,7 @@ public final class TellusOsmWaterSource implements TellusCacheHandle {
 
          OsmWaterTile parsed;
          try {
-            parsed = this.parseVectorTile(payload, bounds, key);
+            parsed = parseVectorTile(payload, key.zoom(), key.x(), key.y());
          } catch (RuntimeException error) {
             Tellus.LOGGER.warn("Overture water parse failed for tile {}", key, error);
             this.tileLoadFailures.add(key);
@@ -540,7 +539,7 @@ public final class TellusOsmWaterSource implements TellusCacheHandle {
       }
    }
 
-   private OsmWaterTile parseVectorTile(byte[] payload, TellusOsmWaterSource.TileGeoBounds bounds, TellusOsmWaterSource.TileKey key) {
+   static OsmWaterTile parseVectorTile(byte[] payload, int zoom, int tileX, int tileY) {
       if (payload.length == 0) {
          return OsmWaterTile.empty();
       } else {
@@ -554,6 +553,8 @@ public final class TellusOsmWaterSource implements TellusCacheHandle {
          if (tile.getLayersCount() == 0) {
             return OsmWaterTile.empty();
          } else {
+            TellusOsmWaterSource.TileKey key = new TellusOsmWaterSource.TileKey(zoom, tileX, tileY);
+            TellusOsmWaterSource.TileGeoBounds bounds = tileBounds(key);
             List<OsmWaterFeature> features = new ArrayList<>();
 
             for (Layer layer : tile.getLayersList()) {
@@ -561,7 +562,7 @@ public final class TellusOsmWaterSource implements TellusCacheHandle {
                   int extent = layer.hasExtent() && layer.getExtent() > 0 ? layer.getExtent() : DEFAULT_TILE_EXTENT;
 
                   for (Feature feature : layer.getFeaturesList()) {
-                     features.addAll(this.parseFeature(feature, layer, key, extent));
+                     features.addAll(parseFeature(feature, layer, key, extent));
                   }
                }
             }
@@ -571,7 +572,7 @@ public final class TellusOsmWaterSource implements TellusCacheHandle {
       }
    }
 
-   private List<OsmWaterFeature> parseFeature(Feature feature, Layer layer, TellusOsmWaterSource.TileKey key, int extent) {
+   private static List<OsmWaterFeature> parseFeature(Feature feature, Layer layer, TellusOsmWaterSource.TileKey key, int extent) {
       Map<String, Object> tags = decodeTags(feature, layer);
       String classTag = nonBlank(asString(tags.get("class")));
       String subtype = nonBlank(asString(tags.get("subtype")));
@@ -580,6 +581,12 @@ public final class TellusOsmWaterSource implements TellusCacheHandle {
       } else {
          boolean oceanHint = "ocean".equalsIgnoreCase(classTag) || "ocean".equalsIgnoreCase(subtype);
          OsmWaterKind kind = OsmWaterKind.fromTags(classTag, subtype);
+         // Physical features locate named seas, oceans, bays, etc.; their
+         // polygons can include entire islands. Only water-surface geometry
+         // may generate water. Keep waterfall points as no-carve markers.
+         if ("physical".equalsIgnoreCase(subtype) && kind != OsmWaterKind.WATERFALL) {
+            return List.of();
+         }
          oceanHint |= kind.ocean();
          long featureId = resolveFeatureId(feature, tags);
          if (kind == OsmWaterKind.WATERFALL && feature.getType() != Tile.GeomType.POINT) {

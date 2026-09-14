@@ -921,7 +921,7 @@ public final class WaterSurfaceResolver implements TellusCacheHandle {
                   throw new OceanCoverageUnavailableException(coast.coverageStatus(), gridMinX + dx, worldZ);
                }
                if (coast.ocean()) {
-                  // Overture ocean/sea polygons are definitive and override any
+                  // Overture ocean-surface polygons are definitive and override any
                   // overlapping inland-water geometry or DEM elevation.
                   baseWaterMask[index] = true;
                   noDataMask[index] = true;

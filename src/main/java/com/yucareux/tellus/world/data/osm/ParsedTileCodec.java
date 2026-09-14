@@ -18,7 +18,9 @@ final class ParsedTileCodec {
    private static final int MAGIC_SAND = 1396787524;
    private static final int MAGIC_STREET_LIGHT = 1280461908;
    private static final int ROAD_VERSION = 6;
-   private static final int WATER_VERSION = 3;
+   // Version 3 retained physical label polygons without their source subtype.
+   // Reparse cached MVT data so those labels cannot keep flooding islands.
+   private static final int WATER_VERSION = 4;
    private static final int BUILDING_VERSION = 4;
    private static final int SAND_VERSION = 1;
    private static final int STREET_LIGHT_VERSION = 2;

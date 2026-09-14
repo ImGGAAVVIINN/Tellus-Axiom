@@ -31,7 +31,14 @@ import com.yucareux.tellus.world.data.resolve.ResolveEcoregion;
 import com.yucareux.tellus.world.data.resolve.TellusResolveSource;
 import com.yucareux.tellus.world.realtime.TellusRealtimeState;
 import com.yucareux.tellus.worldgen.arnis.ArnisBuildingRules;
+import com.yucareux.tellus.worldgen.road.StreetLightPlanner;
+import com.yucareux.tellus.worldgen.road.StreetLightModel;
 import com.yucareux.tellus.worldgen.building.BuildingBlueprint;
+import com.yucareux.tellus.worldgen.building.BuildingEntranceAccess;
+import com.yucareux.tellus.worldgen.building.BuildingEntranceLayout;
+import com.yucareux.tellus.worldgen.building.BuildingFloorPlan;
+import com.yucareux.tellus.worldgen.building.TellusBuildingArchitecture;
+import com.yucareux.tellus.worldgen.building.TellusBuildingInteriors;
 import com.yucareux.tellus.worldgen.building.BuildingProfile;
 import com.yucareux.tellus.worldgen.building.BuildingStyle;
 import com.yucareux.tellus.worldgen.building.TellusBuildingBlueprints;
@@ -201,10 +208,6 @@ public final class EarthChunkGenerator extends ChunkGenerator {
    private static final double OCEAN_MONUMENT_MIN_OCEAN_RATIO = 0.85;
    private static final double OCEAN_MONUMENT_MIN_DEEP_OCEAN_RATIO = 0.7;
    private static final int OCEAN_MONUMENT_TOP_BELOW_SEA = 2;
-   private static final double ROAD_LIGHT_BASE_SPACING_METERS = 40.0;
-   private static final int ROAD_LIGHT_MIN_SPACING_BLOCKS = 8;
-   private static final int ROAD_LIGHT_MIN_ROAD_WIDTH_BLOCKS = 2;
-   private static final double ROAD_LIGHT_EDGE_TOLERANCE_BLOCKS = 0.55;
    private static final int OSM_CROSSING_SCAN_RADIUS = 8;
    private static final int OSM_CROSSING_STRIPE_RADIUS = 3;
    private static final int OSM_CROSSING_HALF_SPAN = 6;
@@ -226,9 +229,7 @@ public final class EarthChunkGenerator extends ChunkGenerator {
    private static final BlockState ROAD_MARKING_STATE = TellusBlockReferences.concreteState("WHITE");
    private static final BlockState BRIDGE_SUPPORT_SHAFT_STATE = Blocks.QUARTZ_PILLAR.defaultBlockState();
    private static final BlockState BRIDGE_SUPPORT_CAP_STATE = Blocks.QUARTZ_BRICKS.defaultBlockState();
-   private static final BlockState ROAD_LIGHT_BASE_STATE = Blocks.STONE_BRICK_WALL.defaultBlockState();
-   private static final BlockState ROAD_LIGHT_FENCE_STATE = Blocks.OAK_FENCE.defaultBlockState();
-   private static final BlockState ROAD_LIGHT_GLOW_STATE = Blocks.GLOWSTONE.defaultBlockState();
+   private static final BlockState ROAD_POINT_BASE_STATE = Blocks.STONE_BRICK_WALL.defaultBlockState();
    private static final BlockState ROAD_SIGNAL_POLE_STATE = Blocks.IRON_BARS.defaultBlockState();
    private static final BlockState ROAD_SIGNAL_HEAD_STATE = TellusBlockReferences.woolState("BLACK");
    private static final BlockState ROAD_SIGNAL_RED_STATE = TellusBlockReferences.concreteState("RED");
@@ -241,16 +242,6 @@ public final class EarthChunkGenerator extends ChunkGenerator {
    private static final BlockState ROAD_BICYCLE_RACK_STATE = Blocks.IRON_BARS.defaultBlockState();
    private static final BlockState ROAD_FOUNTAIN_STATE = Blocks.WATER_CAULDRON.defaultBlockState();
    private static final BlockState ROAD_BOLLARD_STATE = Blocks.COBBLESTONE_WALL.defaultBlockState();
-   private static final BlockState BUILDING_BOOKSHELF_STATE = Blocks.BOOKSHELF.defaultBlockState();
-   private static final BlockState BUILDING_BARREL_STATE = Blocks.BARREL.defaultBlockState();
-   private static final BlockState BUILDING_CRAFTING_STATE = Blocks.CRAFTING_TABLE.defaultBlockState();
-   private static final BlockState BUILDING_FURNACE_STATE = Blocks.FURNACE.defaultBlockState();
-   private static final BlockState BUILDING_CAULDRON_STATE = Blocks.CAULDRON.defaultBlockState();
-   private static final BlockState BUILDING_WHITE_WOOL_STATE = TellusBlockReferences.woolState("WHITE");
-   private static final BlockState ROAD_LIGHT_TRAPDOOR_BASE_STATE = Objects.requireNonNull(
-      Blocks.SPRUCE_TRAPDOOR.defaultBlockState().setValue(BlockStateProperties.OPEN, Boolean.FALSE).setValue(BlockStateProperties.HALF, Half.BOTTOM),
-      "roadLightTrapdoorBaseState"
-   );
    private static final int BUILDING_SLICE_PADDING = 6;
    private static final boolean FULL_CHUNK_OSM_NON_BLOCKING = Boolean.parseBoolean(System.getProperty("tellus.osm.fullChunksNonBlocking", "false"));
    private static final boolean FAST_FULL_CHUNK = Boolean.parseBoolean(System.getProperty("tellus.chunkgen.fastFullChunk", "true"));
@@ -2163,11 +2154,14 @@ public final class EarthChunkGenerator extends ChunkGenerator {
                   EarthChunkGenerator.PreparedChunkRoadLights preparedRoadLights = this.prepareRoadLightsForChunk(
                      pos,
                      roads,
-                     filterRoadPointsByKind(roadPoints, RoadPointKind.STREET_LIGHT),
+                     this.settings.worldScale() <= StreetLightPlanner.MAX_SCALE
+                        ? this.fetchOsmStreetLightsForAreaDetailed(chunkMinX, chunkMinZ, chunkMaxX, chunkMaxZ,
+                           StreetLightPlanner.CONTEXT_MARGIN, queryMode).features() : List.of(),
                      widths,
                      chunkRoadClass,
-                     chunkRoadMode,
-                     chunkRoadDeckY,
+                     terrainSurfaces,
+                     waterSurfaces,
+                     waterFlags,
                      bridgeSupportShaftPresent,
                      bridgeSupportShaftBottomY,
                      bridgeSupportShaftTopY,
@@ -3162,134 +3156,6 @@ public final class EarthChunkGenerator extends ChunkGenerator {
       };
    }
 
-   private static int roadLightSpacingBlocks(double worldScale) {
-      if (!(worldScale > 0.0)) {
-         return 40;
-      } else {
-         return Mth.clamp((int)Math.round(ROAD_LIGHT_BASE_SPACING_METERS / worldScale), ROAD_LIGHT_MIN_SPACING_BLOCKS, 40);
-      }
-   }
-
-   private static int roadLightMinimumSpacingBlocks(int spacingBlocks) {
-      return Math.max(3, (int)Math.round(spacingBlocks * 0.75));
-   }
-
-   private static int roadLightFenceCount(double worldScale) {
-      if (worldScale <= 3.0) {
-         return 3;
-      } else {
-         return worldScale <= 8.0 ? 2 : 1;
-      }
-   }
-
-   private static EarthChunkGenerator.SampledRoadStation sampleRoadStation(
-      double[] worldXs, double[] worldZs, double[] segmentStarts, double[] segmentLengths, double station
-   ) {
-      for (int i = 0; i < segmentLengths.length; i++) {
-         double segmentLength = segmentLengths[i];
-         if (!(segmentLength <= 1.0E-6)) {
-            double segmentStart = segmentStarts[i];
-            double segmentEnd = segmentStart + segmentLength;
-            if (station <= segmentEnd + 1.0E-6 || i == segmentLengths.length - 1) {
-               double dx = worldXs[i + 1] - worldXs[i];
-               double dz = worldZs[i + 1] - worldZs[i];
-               double t = Mth.clamp((station - segmentStart) / segmentLength, 0.0, 1.0);
-               return new EarthChunkGenerator.SampledRoadStation(worldXs[i] + dx * t, worldZs[i] + dz * t, dx / segmentLength, dz / segmentLength);
-            }
-         }
-      }
-
-      return null;
-   }
-
-   private static EarthChunkGenerator.RoadLightAnchor findRoadLightAnchor(
-      EarthChunkGenerator.SampledRoadStation sampled,
-      boolean placeLeft,
-      int roadWidth,
-      int roadClassId,
-      int roadModeId,
-      int chunkMinX,
-      int chunkMinZ,
-      byte[] chunkRoadClass,
-      byte[] chunkRoadMode,
-      int[] chunkRoadDeckY
-   ) {
-      double normalX = placeLeft ? -sampled.tangentZ() : sampled.tangentZ();
-      double normalZ = placeLeft ? sampled.tangentX() : -sampled.tangentX();
-      double scanRadius = Math.max(2.0, roadWidth + 2.0);
-      double alongTolerance = Math.max(1.25, roadWidth * 0.45);
-      double minimumEdgeLateral = Math.max(0.25, Math.max(0.5, (roadWidth - 1) * 0.5) - ROAD_LIGHT_EDGE_TOLERANCE_BLOCKS);
-      int minLocalX = Math.max(0, quantizeRoadCoordinate(sampled.worldX() - scanRadius) - chunkMinX);
-      int maxLocalX = Math.min(CHUNK_MASK, quantizeRoadCoordinate(sampled.worldX() + scanRadius) - chunkMinX);
-      int minLocalZ = Math.max(0, quantizeRoadCoordinate(sampled.worldZ() - scanRadius) - chunkMinZ);
-      int maxLocalZ = Math.min(CHUNK_MASK, quantizeRoadCoordinate(sampled.worldZ() + scanRadius) - chunkMinZ);
-      EarthChunkGenerator.RoadLightAnchor bestAnchor = null;
-      double bestLateral = Double.NEGATIVE_INFINITY;
-      double bestAlong = Double.POSITIVE_INFINITY;
-      double bestDistanceSq = Double.POSITIVE_INFINITY;
-      double minLateral = Double.POSITIVE_INFINITY;
-      double maxLateral = Double.NEGATIVE_INFINITY;
-
-      for (int localZ = minLocalZ; localZ <= maxLocalZ; localZ++) {
-         for (int localX = minLocalX; localX <= maxLocalX; localX++) {
-            int index = chunkIndex(localX, localZ);
-            if (chunkRoadClass[index] == roadClassId && chunkRoadMode[index] == roadModeId) {
-               double dx = chunkMinX + localX - sampled.worldX();
-               double dz = chunkMinZ + localZ - sampled.worldZ();
-               double along = dx * sampled.tangentX() + dz * sampled.tangentZ();
-               if (!(Math.abs(along) > alongTolerance)) {
-                  double lateral = dx * normalX + dz * normalZ;
-                  minLateral = Math.min(minLateral, lateral);
-                  maxLateral = Math.max(maxLateral, lateral);
-                  if (!(lateral < minimumEdgeLateral)) {
-                     double distanceSq = dx * dx + dz * dz;
-                     double absAlong = Math.abs(along);
-                     if (lateral > bestLateral + 1.0E-6
-                        || Math.abs(lateral - bestLateral) <= 1.0E-6 && absAlong < bestAlong - 1.0E-6
-                        || Math.abs(lateral - bestLateral) <= 1.0E-6 && Math.abs(absAlong - bestAlong) <= 1.0E-6 && distanceSq < bestDistanceSq) {
-                        bestLateral = lateral;
-                        bestAlong = absAlong;
-                        bestDistanceSq = distanceSq;
-                        bestAnchor = new EarthChunkGenerator.RoadLightAnchor(localX, localZ, chunkRoadDeckY[index], index);
-                     }
-                  }
-               }
-            }
-         }
-      }
-
-      if (bestAnchor == null || minLateral == Double.POSITIVE_INFINITY || maxLateral == Double.NEGATIVE_INFINITY) {
-         return null;
-      }
-
-      double span = maxLateral - minLateral;
-      if (span > roadWidth + 0.75) {
-         return null;
-      }
-
-      return bestAnchor;
-   }
-
-   private static boolean hasNearbyPreparedRoadLight(
-      int localX, int localZ, int minSpacingBlocks, EarthChunkGenerator.PreparedChunkRoadLights preparedRoadLights
-   ) {
-      if (preparedRoadLights == null || preparedRoadLights.isEmpty()) {
-         return false;
-      } else {
-         int minSpacingSq = minSpacingBlocks * minSpacingBlocks;
-
-         for (EarthChunkGenerator.PreparedRoadLight light : preparedRoadLights.lights()) {
-            int dx = light.localX() - localX;
-            int dz = light.localZ() - localZ;
-            if (dx * dx + dz * dz < minSpacingSq) {
-               return true;
-            }
-         }
-
-         return false;
-      }
-   }
-
    private static boolean intersectsRoadLightBridgeSupport(
       int localX,
       int localZ,
@@ -3321,10 +3187,6 @@ public final class EarthChunkGenerator extends ChunkGenerator {
       } else {
          return tangentZ >= 0.0 ? Direction.SOUTH : Direction.NORTH;
       }
-   }
-
-   private static BlockState roadLightTrapdoorState(Direction facing) {
-      return (BlockState)ROAD_LIGHT_TRAPDOOR_BASE_STATE.setValue(BlockStateProperties.HORIZONTAL_FACING, facing);
    }
 
    private void clearRoadSurfaceColumn(
@@ -7861,7 +7723,6 @@ public final class EarthChunkGenerator extends ChunkGenerator {
                int sampleMaxX = chunkMaxX + OSM_BUILDING_QUERY_MARGIN;
                int sampleMinZ = chunkMinZ - OSM_BUILDING_QUERY_MARGIN;
                int sampleMaxZ = chunkMaxZ + OSM_BUILDING_QUERY_MARGIN;
-               List<RoadFeature> entranceRoads = this.fetchEntranceRoads(chunkMinX, chunkMinZ, chunkMaxX, chunkMaxZ, worldScale, queryMode);
                Map<String, EarthChunkGenerator.BuildingGroupScratch> groups = new HashMap<>();
                List<EarthChunkGenerator.RasterizedBuildingFeature> partFeatures = new ArrayList<>();
                List<EarthChunkGenerator.RasterizedBuildingFeature> footprintFeatures = new ArrayList<>();
@@ -7922,7 +7783,11 @@ public final class EarthChunkGenerator extends ChunkGenerator {
                   Arrays.fill(overlyingPartFloorY, Integer.MAX_VALUE);
 
                   for (EarthChunkGenerator.RasterizedBuildingFeature rasterized : partFeatures) {
-                     int baseY = groups.get(rasterized.groupId()).baseY();
+                     List<OsmBuildingFeature> entranceNeighbors = this.fetchEntranceNeighbors(rasterized.feature(), worldScale, queryMode);
+                     int baseY = worldScale == 1.0
+                        ? this.adjustBuildingBaseY(BuildingPlacementSupport.sampleFoundationHeight(rasterized.feature(), entranceNeighbors,
+                           worldScale, this::sampleSurfaceHeight), chunkMinY, chunkMaxY)
+                        : groups.get(rasterized.groupId()).baseY();
                      BuildingProfile profile = this.resolveBuildingProfile(
                         rasterized.feature(), baseY, biomeResolver.sample(rasterized.feature(), baseY), worldScale
                      );
@@ -7938,8 +7803,9 @@ public final class EarthChunkGenerator extends ChunkGenerator {
                         floorY,
                         roofBaseY,
                         topY,
-                        entranceRoads,
-                        worldScale
+                        this.fetchEntranceRoads(rasterized.feature(), worldScale, queryMode),
+                        worldScale,
+                        entranceNeighbors
                      );
                      EarthChunkGenerator.PreparedBuildingFeature preparedFeature = this.prepareLocalBuildingFeature(
                         rasterized, overlyingPartFloorY, blueprint, chunkMinX, chunkMinZ
@@ -7954,7 +7820,11 @@ public final class EarthChunkGenerator extends ChunkGenerator {
                   }
 
                   for (EarthChunkGenerator.RasterizedBuildingFeature rasterized : footprintFeatures) {
-                     int baseY = groups.get(rasterized.groupId()).baseY();
+                     List<OsmBuildingFeature> entranceNeighbors = this.fetchEntranceNeighbors(rasterized.feature(), worldScale, queryMode);
+                     int baseY = worldScale == 1.0
+                        ? this.adjustBuildingBaseY(BuildingPlacementSupport.sampleFoundationHeight(rasterized.feature(), entranceNeighbors,
+                           worldScale, this::sampleSurfaceHeight), chunkMinY, chunkMaxY)
+                        : groups.get(rasterized.groupId()).baseY();
                      BuildingProfile profile = this.resolveBuildingProfile(
                         rasterized.feature(), baseY, biomeResolver.sample(rasterized.feature(), baseY), worldScale
                      );
@@ -7970,8 +7840,9 @@ public final class EarthChunkGenerator extends ChunkGenerator {
                         floorY,
                         roofBaseY,
                         topY,
-                        entranceRoads,
-                        worldScale
+                        this.fetchEntranceRoads(rasterized.feature(), worldScale, queryMode),
+                        worldScale,
+                        entranceNeighbors
                      );
                      EarthChunkGenerator.PreparedBuildingFeature preparedFeature = this.prepareLocalBuildingFeature(
                         rasterized, overlyingPartFloorY, blueprint, chunkMinX, chunkMinZ
@@ -8122,7 +7993,7 @@ public final class EarthChunkGenerator extends ChunkGenerator {
          int worldZ = chunkMinZ + localZ;
          int topY = blueprint.roofTopY(worldX, worldZ, rasterized.boundaryDistance(index));
          if (this.usesParapet(blueprint.profile().roofProfile()) && rasterized.boundary(index)) {
-            topY += blueprint.profile().parapetHeight();
+            topY += blueprint.parapetHeight(rasterized.boundaryDistance(index));
          }
 
          if (overlyingPartFloorY != null) {
@@ -8148,7 +8019,7 @@ public final class EarthChunkGenerator extends ChunkGenerator {
             columnTopY,
             blueprint,
             groundContact,
-            this.coreLayoutFor(blueprint)
+            new TellusBuildingInteriors(BuildingFloorPlan.create(blueprint, rasterized.feature(), this.settings.worldScale()))
          );
       }
    }
@@ -8202,6 +8073,17 @@ public final class EarthChunkGenerator extends ChunkGenerator {
                int worldZ = chunkMinZ + localZ;
                this.placePreparedBuildingColumn(level, cursor, flags, feature, palette, worldX, worldZ, index, columnTopY, chunkMinX, chunkMinZ, minY, maxY);
             }
+         }
+         for (EarthChunkGenerator.PreparedBuildingFeature feature : prepared.features()) {
+            BuildingBlueprint blueprint = feature.blueprint();
+            int x = blueprint.entranceWorldX(), z = blueprint.entranceWorldZ();
+            if (!feature.groundContact() || blueprint.entranceWidth() == 0
+               || x < chunkMinX || x > chunkMinX + CHUNK_MASK || z < chunkMinZ || z > chunkMinZ + CHUNK_MASK
+               || feature.columnTopY(chunkIndex(x - chunkMinX, z - chunkMinZ)) < blueprint.floorY() + 2) continue;
+            BuildingEntranceAccess.place(blueprint, minY, maxY,
+               position -> level.hasChunk(position.getX() >> 4, position.getZ() >> 4)
+                  ? level.getBlockState(position) : Blocks.BARRIER.defaultBlockState(),
+               (position, state) -> level.setBlock(position, state, flags));
          }
       }
    }
@@ -8284,14 +8166,19 @@ public final class EarthChunkGenerator extends ChunkGenerator {
       return palette == null ? null : palette.top();
    }
 
-   private List<RoadFeature> fetchEntranceRoads(
-      int minBlockX, int minBlockZ, int maxBlockX, int maxBlockZ, double worldScale, OsmQueryMode queryMode
-   ) {
-      if (!(worldScale > 0.0) || worldScale > OSM_ROAD_MAX_SCALE || !OSM_ROAD_SOURCE.available()) {
-         return List.of();
-      }
+   private List<RoadFeature> fetchEntranceRoads(OsmBuildingFeature feature, double worldScale, OsmQueryMode queryMode) {
+      if (!(worldScale > 0.0) || worldScale > 1.0 || !OSM_ROAD_SOURCE.available()) return List.of();
+      // Every chunk of a building must see the same streets when choosing its front door.
+      return this.fetchOsmRoadsForAreaDetailed(Mth.floor(feature.minBlockXForScale(worldScale)),
+         Mth.floor(feature.minBlockZ(worldScale)), Mth.ceil(feature.maxBlockXForScale(worldScale)),
+         Mth.ceil(feature.maxBlockZ(worldScale)), 32, queryMode).features();
+   }
 
-      return this.fetchOsmRoadsForAreaDetailed(minBlockX, minBlockZ, maxBlockX, maxBlockZ, 24, queryMode).features();
+   private List<OsmBuildingFeature> fetchEntranceNeighbors(OsmBuildingFeature feature, double worldScale, OsmQueryMode queryMode) {
+      if (!(worldScale > 0.0) || worldScale > 1.0) return List.of();
+      return this.fetchOsmBuildingsForAreaDetailed(Mth.floor(feature.minBlockXForScale(worldScale)),
+         Mth.floor(feature.minBlockZ(worldScale)), Mth.ceil(feature.maxBlockXForScale(worldScale)),
+         Mth.ceil(feature.maxBlockZ(worldScale)), BuildingEntranceLayout.APPROACH_LENGTH + 2, queryMode).features();
    }
 
    private BuildingProfile resolveBuildingProfile(OsmBuildingFeature feature, int baseY, Holder<Biome> biome, double worldScale) {
@@ -8428,10 +8315,18 @@ public final class EarthChunkGenerator extends ChunkGenerator {
       int chunkMinX,
       int chunkMinZ,
       boolean roofEdge,
-      boolean topSurface
+      int y
    ) {
       BuildingBlueprint blueprint = feature.blueprint();
-      if (!topSurface) {
+      if (y != columnTopY) {
+         if (blueprint.profile().category() == BuildingProfile.BuildingCategory.HOUSE
+            && this.isPitchedRoof(blueprint.profile().roofProfile())) {
+            if (y == blueprint.roofBaseY(boundaryDistance)) {
+               return palette.floor();
+            }
+            // Masonry gable ends enclose a hollow attic below the roof covering.
+            return roofEdge ? palette.wall() : AIR_STATE;
+         }
          return palette.roof();
       }
       if (!this.isPitchedRoof(blueprint.profile().roofProfile())) {
@@ -8544,7 +8439,7 @@ public final class EarthChunkGenerator extends ChunkGenerator {
          return;
       }
 
-      EarthChunkGenerator.BuildingCoreLayout coreLayout = feature.coreLayout();
+      TellusBuildingInteriors interior = feature.interior();
       int boundaryDistance = feature.boundaryDistance(index);
       int highestFloor = blueprint.highestActiveFloor(boundaryDistance);
       for (int floorIndex = 0; floorIndex <= highestFloor; floorIndex++) {
@@ -8558,29 +8453,8 @@ public final class EarthChunkGenerator extends ChunkGenerator {
             continue;
          }
 
-         this.setBuildingBlock(level, cursor, worldX, floorBottom, worldZ, palette.floor(), flags, minY, maxY);
-         boolean facadeCell = blueprint.isFacadeCell(boundaryDistance, floorIndex);
-         boolean entrance = floorIndex == 0 && facadeCell && blueprint.isEntranceCell(worldX, worldZ);
-         for (int y = floorBottom + 1; y <= floorTop; y++) {
-            BlockState stairState = this.stairStateForColumn(coreLayout, palette, worldX, worldZ, floorBottom, y);
-            boolean partitionCell = this.isPartitionCell(blueprint, coreLayout, boundaryDistance, worldX, worldZ, floorIndex);
-            BlockState state;
-            if (entrance && y <= floorBottom + 2) {
-               state = AIR_STATE;
-            } else if (stairState != null) {
-               state = stairState;
-            } else if (facadeCell) {
-               state = TellusBuildingFacade.resolveFacadeBlock(blueprint, palette, boundaryDistance, worldX, worldZ, floorIndex, floorBottom, floorTop, y);
-            } else if (partitionCell) {
-               state = palette.partition();
-            } else if (y == floorTop && TellusBuildingLighting.shouldPlaceInteriorLight(blueprint, boundaryDistance, worldX, worldZ, floorIndex)) {
-               state = palette.light();
-            } else if (y == floorBottom + 1) {
-               state = this.furnitureStateFor(blueprint, palette, coreLayout, boundaryDistance, worldX, worldZ, floorIndex);
-            } else {
-               state = AIR_STATE;
-            }
-
+         for (int y = floorBottom; y <= floorTop; y++) {
+            BlockState state = interior.blockAt(palette, boundaryDistance, worldX, worldZ, floorIndex, y);
             this.setBuildingBlock(level, cursor, worldX, y, worldZ, state, flags, minY, maxY);
          }
       }
@@ -8588,7 +8462,7 @@ public final class EarthChunkGenerator extends ChunkGenerator {
       int roofBaseY = Mth.clamp(blueprint.roofBaseY(boundaryDistance), minY, maxY);
       boolean roofEdge = blueprint.isFacadeCell(boundaryDistance, highestFloor);
       for (int y = roofBaseY; y <= columnTopY; y++) {
-         BlockState state = this.roofStateForColumn(feature, palette, worldX, worldZ, index, boundaryDistance, columnTopY, chunkMinX, chunkMinZ, roofEdge, y == columnTopY);
+         BlockState state = this.roofStateForColumn(feature, palette, worldX, worldZ, index, boundaryDistance, columnTopY, chunkMinX, chunkMinZ, roofEdge, y);
          this.setBuildingBlock(level, cursor, worldX, y, worldZ, state, flags, minY, maxY);
       }
 
@@ -8623,7 +8497,7 @@ public final class EarthChunkGenerator extends ChunkGenerator {
          if (y == floorY) {
             state = palette.floor();
          } else if (y >= blueprint.roofBaseY(boundaryDistance)) {
-            state = this.roofStateForColumn(feature, palette, worldX, worldZ, index, boundaryDistance, columnTopY, chunkMinX, chunkMinZ, roofEdge, y == columnTopY);
+            state = this.roofStateForColumn(feature, palette, worldX, worldZ, index, boundaryDistance, columnTopY, chunkMinX, chunkMinZ, roofEdge, y);
          } else {
             int floorIndex = blueprint.floorIndexAtY(y);
             int floorBottom = blueprint.floorBottomY(floorIndex);
@@ -8674,6 +8548,15 @@ public final class EarthChunkGenerator extends ChunkGenerator {
 
             int floorBottom = blueprint.floorBottomY(floorIndex);
             int floorTop = Math.min(columnTopY, blueprint.floorTopY(floorIndex));
+            if (floorIndex == 0 && blueprint.nearEntranceApproach(worldX, worldZ)) {
+               // Adjacent diagonal facade cells must not project trim, glazing or railings into the entry.
+               if (!blueprint.isEntranceCell(worldX, worldZ)) continue;
+               Direction entranceFacing = blueprint.entranceFacing();
+               this.setDecorationBlock(level, cursor, flags, chunkMinX, chunkMinZ,
+                  worldX + entranceFacing.getStepX(), floorBottom + 3, worldZ + entranceFacing.getStepZ(),
+                  this.arnisTopSlab(palette.slab()), minY, maxY);
+               continue;
+            }
             this.placeArnisFacadeDepth(level, cursor, flags, blueprint, palette, worldX, worldZ, floorIndex, floorBottom, floorTop, facing, chunkMinX, chunkMinZ, minY, maxY);
             ArnisBuildingRules.ResidentialDecoration residentialDecoration = ArnisBuildingRules.residentialWindowDecoration(
                blueprint, boundaryDistance, worldX, worldZ, floorIndex, floorBottom, floorTop
@@ -8744,7 +8627,7 @@ public final class EarthChunkGenerator extends ChunkGenerator {
             }
          }
       } else {
-         this.setDecorationBlock(level, cursor, flags, chunkMinX, chunkMinZ, outsideX, Math.max(blueprint.roofBaseY(0), columnTopY - 1), outsideZ, palette.roof(), minY, maxY);
+         this.setDecorationBlock(level, cursor, flags, chunkMinX, chunkMinZ, outsideX, columnTopY, outsideZ, this.arnisRoofStairState(palette, facing.getOpposite()), minY, maxY);
       }
    }
 
@@ -9199,6 +9082,24 @@ public final class EarthChunkGenerator extends ChunkGenerator {
       int minY,
       int maxY
    ) {
+      if (TellusBuildingArchitecture.redesigned(blueprint)) {
+         int outsideX = worldX + facing.getStepX();
+         int outsideZ = worldZ + facing.getStepZ();
+         int edge = TellusBuildingArchitecture.edgeDistance(blueprint, worldX, worldZ, floorIndex);
+         if (blueprint.profile().category() == BuildingProfile.BuildingCategory.HOUSE) {
+            if (floorIndex == 0) {
+               this.setDecorationBlock(level, cursor, flags, chunkMinX, chunkMinZ, outsideX, floorBottom, outsideZ, palette.trim(), minY, maxY);
+            }
+            if (TellusBuildingArchitecture.window(blueprint, blueprint.setbackForFloor(floorIndex), worldX, worldZ, floorIndex, floorBottom + 2)) {
+               this.setDecorationBlock(level, cursor, flags, chunkMinX, chunkMinZ, outsideX, floorBottom + 1, outsideZ,
+                  this.arnisTopSlab(palette.slab()), minY, maxY);
+            }
+         } else if (edge % (floorIndex == 0 ? 5 : 4) == 0) {
+            this.placeVerticalDecorationColumn(level, cursor, flags, chunkMinX, chunkMinZ, outsideX, outsideZ,
+               floorBottom, floorTop, palette.trim(), palette.trim(), minY, maxY);
+         }
+         return;
+      }
       BuildingStyle.WallDepthStyle depthStyle = blueprint.style().wallDepthStyle();
       if (depthStyle == BuildingStyle.WallDepthStyle.NONE || floorTop <= floorBottom) {
          return;
@@ -9286,6 +9187,9 @@ public final class EarthChunkGenerator extends ChunkGenerator {
    private boolean shouldPlaceWindowSill(
       BuildingBlueprint blueprint, int boundaryDistance, int worldX, int worldZ, int floorIndex, int floorBottom, int floorTop
    ) {
+      if (TellusBuildingArchitecture.redesigned(blueprint)) {
+         return false;
+      }
       BuildingStyle style = blueprint.style();
       if (style.facadeFamily() == BuildingStyle.FacadeFamily.GREENHOUSE || style.wallDepthStyle() == BuildingStyle.WallDepthStyle.GLASS_CURTAIN) {
          return false;
@@ -9393,26 +9297,15 @@ public final class EarthChunkGenerator extends ChunkGenerator {
       int minY,
       int maxY
    ) {
-      if (!this.shouldPlaceBuildingDoors()) {
+      if (!this.shouldPlaceBuildingDoors() || !feature.groundContact()) {
          return;
       }
 
+      int localIndex = chunkIndex(worldX & CHUNK_MASK, worldZ & CHUNK_MASK);
+      if (feature.columnTopY(localIndex) < blueprint.floorY() + 2) return;
       int lowerY = blueprint.floorY() + 1;
       int upperY = lowerY + 1;
       if (lowerY < minY || upperY > maxY) {
-         return;
-      }
-
-      if (blueprint.style().garageDoor()) {
-         BlockState garageDoorState = Blocks.IRON_BLOCK.defaultBlockState();
-         this.setBuildingBlock(level, cursor, worldX, lowerY, worldZ, garageDoorState, flags, minY, maxY);
-         this.setBuildingBlock(level, cursor, worldX, upperY, worldZ, garageDoorState, flags, minY, maxY);
-         if (blueprint.interiorsEnabled()) {
-            int insideX = worldX - blueprint.entranceFacing().getStepX();
-            int insideZ = worldZ - blueprint.entranceFacing().getStepZ();
-            this.setBuildingBlock(level, cursor, insideX, lowerY, insideZ, AIR_STATE, flags, minY, maxY);
-            this.setBuildingBlock(level, cursor, insideX, upperY, insideZ, AIR_STATE, flags, minY, maxY);
-         }
          return;
       }
 
@@ -9422,12 +9315,6 @@ public final class EarthChunkGenerator extends ChunkGenerator {
       BlockState upper = lower.setValue(BlockStateProperties.DOUBLE_BLOCK_HALF, DoubleBlockHalf.UPPER);
       this.setBuildingBlock(level, cursor, worldX, lowerY, worldZ, lower, flags, minY, maxY);
       this.setBuildingBlock(level, cursor, worldX, upperY, worldZ, upper, flags, minY, maxY);
-      if (blueprint.interiorsEnabled()) {
-         int insideX = worldX - blueprint.entranceFacing().getStepX();
-         int insideZ = worldZ - blueprint.entranceFacing().getStepZ();
-         this.setBuildingBlock(level, cursor, insideX, lowerY, insideZ, AIR_STATE, flags, minY, maxY);
-         this.setBuildingBlock(level, cursor, insideX, upperY, insideZ, AIR_STATE, flags, minY, maxY);
-      }
    }
 
    private boolean shouldPlaceBuildingDoors() {
@@ -9441,187 +9328,6 @@ public final class EarthChunkGenerator extends ChunkGenerator {
          cursor.set(worldX, worldY, worldZ);
          level.setBlock(cursor, state, flags);
       }
-   }
-
-   private EarthChunkGenerator.BuildingCoreLayout coreLayoutFor(BuildingBlueprint blueprint) {
-      BuildingProfile.Archetype archetype = blueprint.profile().archetype();
-      BuildingProfile.BuildingCategory category = blueprint.profile().category();
-      if (category == BuildingProfile.BuildingCategory.GARAGE
-         || category == BuildingProfile.BuildingCategory.SHED
-         || category == BuildingProfile.BuildingCategory.GREENHOUSE) {
-         return null;
-      }
-      if (archetype == BuildingProfile.Archetype.HOUSE && blueprint.floorCount() <= 1) {
-         return null;
-      }
-
-      int width = blueprint.width();
-      int depth = blueprint.depth();
-      int coreWidth = switch (archetype) {
-         case TOWER -> 4;
-         case HOUSE -> 2;
-         case APARTMENT, COMMERCIAL, INDUSTRIAL -> 3;
-         case GENERIC -> 0;
-      };
-      int coreDepth = switch (archetype) {
-         case TOWER -> 4;
-         case HOUSE -> 4;
-         case APARTMENT, COMMERCIAL, INDUSTRIAL -> 3;
-         case GENERIC -> 0;
-      };
-      if (coreWidth < 2 || coreDepth < 2 || width < coreWidth + 2 || depth < coreDepth + 2) {
-         return null;
-      }
-
-      int minX = blueprint.minWorldX() + Math.max(1, (width - coreWidth) / 2);
-      int minZ = blueprint.minWorldZ() + Math.max(1, (depth - coreDepth) / 2);
-      Direction stairFacing = width >= depth ? Direction.EAST : Direction.SOUTH;
-      return new EarthChunkGenerator.BuildingCoreLayout(minX, minX + coreWidth - 1, minZ, minZ + coreDepth - 1, stairFacing);
-   }
-
-   private BlockState stairStateForColumn(
-      EarthChunkGenerator.BuildingCoreLayout coreLayout,
-      TellusBuildingMaterials.BuildingMaterialPalette palette,
-      int worldX,
-      int worldZ,
-      int floorBottom,
-      int y
-   ) {
-      if (coreLayout == null || !coreLayout.contains(worldX, worldZ)) {
-         return null;
-      }
-
-      if (coreLayout.stairFacing() == Direction.EAST || coreLayout.stairFacing() == Direction.WEST) {
-         int stairZ = coreLayout.minZ() + (coreLayout.maxZ() - coreLayout.minZ()) / 2;
-         int step = worldX - coreLayout.minX();
-         if (worldZ == stairZ && step >= 0 && step <= 2 && y == floorBottom + 1 + step) {
-            return palette.stair().setValue(BlockStateProperties.HORIZONTAL_FACING, Direction.EAST);
-         }
-      } else {
-         int stairX = coreLayout.minX() + (coreLayout.maxX() - coreLayout.minX()) / 2;
-         int step = worldZ - coreLayout.minZ();
-         if (worldX == stairX && step >= 0 && step <= 2 && y == floorBottom + 1 + step) {
-            return palette.stair().setValue(BlockStateProperties.HORIZONTAL_FACING, Direction.SOUTH);
-         }
-      }
-
-      return null;
-   }
-
-   private boolean isPartitionCell(
-      BuildingBlueprint blueprint, EarthChunkGenerator.BuildingCoreLayout coreLayout, int boundaryDistance, int worldX, int worldZ, int floorIndex
-   ) {
-      if (coreLayout != null && coreLayout.boundary(worldX, worldZ)) {
-         return true;
-      }
-
-      if (!TellusBuildingFacade.shouldPlaceInteriorPartition(boundaryDistance)) {
-         return false;
-      }
-      BuildingProfile.BuildingCategory category = blueprint.profile().category();
-      if (category == BuildingProfile.BuildingCategory.GARAGE
-         || category == BuildingProfile.BuildingCategory.SHED
-         || category == BuildingProfile.BuildingCategory.GREENHOUSE) {
-         return false;
-      }
-
-      int localX = worldX - blueprint.minWorldX();
-      int localZ = worldZ - blueprint.minWorldZ();
-      int width = blueprint.width();
-      int depth = blueprint.depth();
-      int midX = width / 2;
-      int midZ = depth / 2;
-      return switch (blueprint.profile().archetype()) {
-         case HOUSE -> width >= depth ? localZ == midZ && Math.abs(localX - midX) > 1 : localX == midX && Math.abs(localZ - midZ) > 1;
-         case APARTMENT -> width >= depth ? localZ == midZ || localZ == midZ - 1 : localX == midX || localX == midX - 1;
-         case COMMERCIAL -> coreLayout != null && (
-            worldX == coreLayout.maxX() + 1 && worldZ >= coreLayout.minZ() && worldZ <= coreLayout.maxZ()
-               || worldZ == coreLayout.maxZ() + 1 && worldX >= coreLayout.minX() && worldX <= coreLayout.maxX()
-         );
-         case INDUSTRIAL -> localX <= 3 && localZ <= 3 && (localX == 3 || localZ == 3);
-         case TOWER -> false;
-         case GENERIC -> floorIndex == 0 && (localX == midX || localZ == midZ);
-      };
-   }
-
-   private BlockState furnitureStateFor(
-      BuildingBlueprint blueprint,
-      TellusBuildingMaterials.BuildingMaterialPalette palette,
-      EarthChunkGenerator.BuildingCoreLayout coreLayout,
-      int boundaryDistance,
-      int worldX,
-      int worldZ,
-      int floorIndex
-   ) {
-      if (coreLayout != null && coreLayout.contains(worldX, worldZ)) {
-         return AIR_STATE;
-      }
-      if (!TellusBuildingFacade.shouldPlaceFurniture(boundaryDistance)) {
-         return AIR_STATE;
-      }
-      BuildingProfile.BuildingCategory category = blueprint.profile().category();
-      if (category == BuildingProfile.BuildingCategory.GARAGE
-         || category == BuildingProfile.BuildingCategory.SHED
-         || category == BuildingProfile.BuildingCategory.GREENHOUSE) {
-         return AIR_STATE;
-      }
-
-      int localX = worldX - blueprint.minWorldX();
-      int localZ = worldZ - blueprint.minWorldZ();
-      int width = blueprint.width();
-      int depth = blueprint.depth();
-      return switch (blueprint.profile().archetype()) {
-         case HOUSE -> this.houseFurnitureState(localX, localZ, width, depth, floorIndex, palette);
-         case APARTMENT -> this.apartmentFurnitureState(localX, localZ, width, depth, floorIndex, palette);
-         case COMMERCIAL -> (localX % 3 == 1 && localZ % 3 == 1) ? palette.slab() : AIR_STATE;
-         case INDUSTRIAL -> (localX + localZ + floorIndex) % 4 == 0 ? BUILDING_BARREL_STATE : (localX + localZ + floorIndex) % 7 == 0 ? BUILDING_FURNACE_STATE : AIR_STATE;
-         case TOWER -> (localX % 4 == 1 && localZ % 4 == 1) ? palette.slab() : (floorIndex % 5 == 0 && localX % 5 == 2 && localZ % 5 == 2) ? BUILDING_BOOKSHELF_STATE : AIR_STATE;
-         case GENERIC -> AIR_STATE;
-      };
-   }
-
-   private BlockState houseFurnitureState(int localX, int localZ, int width, int depth, int floorIndex, TellusBuildingMaterials.BuildingMaterialPalette palette) {
-      int frontBand = Math.max(2, depth / 3);
-      if (floorIndex == 0 && localZ >= depth - 2 && localX % 3 == 1) {
-         return switch (Math.floorMod(localX, 6)) {
-            case 1 -> BUILDING_BARREL_STATE;
-            case 3 -> BUILDING_CRAFTING_STATE;
-            default -> BUILDING_FURNACE_STATE;
-         };
-      }
-      if (floorIndex > 0 && localZ <= frontBand && localX % 4 == 1) {
-         return BUILDING_WHITE_WOOL_STATE;
-      }
-      if (localX <= 1 && localZ <= 1) {
-         return BUILDING_CAULDRON_STATE;
-      }
-      if (floorIndex == 0 && localX == width / 2 && localZ == frontBand) {
-         return palette.slab();
-      }
-      return AIR_STATE;
-   }
-
-   private BlockState apartmentFurnitureState(int localX, int localZ, int width, int depth, int floorIndex, TellusBuildingMaterials.BuildingMaterialPalette palette) {
-      if (width >= depth) {
-         int corridorMin = depth / 2 - 1;
-         int corridorMax = corridorMin + 1;
-         if (localZ < corridorMin && localX % 4 == 1) {
-            return floorIndex == 0 ? BUILDING_BARREL_STATE : BUILDING_WHITE_WOOL_STATE;
-         }
-         if (localZ > corridorMax && localX % 4 == 2) {
-            return localX % 8 == 2 ? BUILDING_BOOKSHELF_STATE : palette.slab();
-         }
-      } else {
-         int corridorMin = width / 2 - 1;
-         int corridorMax = corridorMin + 1;
-         if (localX < corridorMin && localZ % 4 == 1) {
-            return floorIndex == 0 ? BUILDING_BARREL_STATE : BUILDING_WHITE_WOOL_STATE;
-         }
-         if (localX > corridorMax && localZ % 4 == 2) {
-            return localZ % 8 == 2 ? BUILDING_BOOKSHELF_STATE : palette.slab();
-         }
-      }
-      return AIR_STATE;
    }
 
    private void applyRoadAreaOverlay(
@@ -9872,7 +9578,7 @@ public final class EarthChunkGenerator extends ChunkGenerator {
 
       occupiedDecorations[anchor.index()] = true;
       cursor.set(worldX, baseY + 1, worldZ);
-      this.setChunkBlock(level, chunk, cursor, ROAD_LIGHT_BASE_STATE);
+      this.setChunkBlock(level, chunk, cursor, ROAD_POINT_BASE_STATE);
       for (int y = baseY + 2; y <= baseY + 5; y++) {
          cursor.set(worldX, y, worldZ);
          this.setChunkBlock(level, chunk, cursor, ROAD_SIGNAL_POLE_STATE);
@@ -9929,7 +9635,7 @@ public final class EarthChunkGenerator extends ChunkGenerator {
 
       occupiedDecorations[anchor.index()] = true;
       cursor.set(worldX, baseY + 1, worldZ);
-      this.setChunkBlock(level, chunk, cursor, ROAD_LIGHT_BASE_STATE);
+      this.setChunkBlock(level, chunk, cursor, ROAD_POINT_BASE_STATE);
       for (int y = baseY + 2; y <= baseY + 3; y++) {
          cursor.set(worldX, y, worldZ);
          this.setChunkBlock(level, chunk, cursor, ROAD_SIGNAL_POLE_STATE);
@@ -10120,226 +9826,42 @@ public final class EarthChunkGenerator extends ChunkGenerator {
    }
 
    private EarthChunkGenerator.PreparedChunkRoadLights prepareRoadLightsForChunk(
-      ChunkPos pos,
-      List<RoadFeature> roads,
-      List<OsmStreetLightFeature> exactStreetLights,
-      EarthChunkGenerator.RoadWidths widths,
-      byte[] chunkRoadClass,
-      byte[] chunkRoadMode,
-      int[] chunkRoadDeckY,
-      boolean[] bridgeSupportShaftPresent,
-      int[] bridgeSupportShaftBottomY,
-      int[] bridgeSupportShaftTopY,
-      boolean[] bridgeSupportCapPresent,
-      int[] bridgeSupportCapBottomY,
-      int[] bridgeSupportCapTopY,
+      ChunkPos pos, List<RoadFeature> roads, List<OsmStreetLightFeature> exactStreetLights,
+      EarthChunkGenerator.RoadWidths widths, byte[] chunkRoadClass,
+      int[] terrainSurfaces, int[] waterSurfaces, boolean[] waterFlags,
+      boolean[] bridgeSupportShaftPresent, int[] bridgeSupportShaftBottomY, int[] bridgeSupportShaftTopY,
+      boolean[] bridgeSupportCapPresent, int[] bridgeSupportCapBottomY, int[] bridgeSupportCapTopY,
       EarthChunkGenerator.PreparedChunkBuildings preparedBuildings
    ) {
-      double worldScale = this.settings.worldScale();
-      int spacingBlocks = roadLightSpacingBlocks(worldScale);
-      int minLampSpacingBlocks = roadLightMinimumSpacingBlocks(spacingBlocks);
-      int fenceCount = roadLightFenceCount(worldScale);
-      int chunkMinX = pos.getMinBlockX();
-      int chunkMinZ = pos.getMinBlockZ();
-      double blocksPerDegree = blocksPerDegree(worldScale);
-      boolean[] occupiedAnchors = new boolean[CHUNK_AREA];
+      int minX = pos.getMinBlockX();
+      int minZ = pos.getMinBlockZ();
+      var lamps = StreetLightPlanner.plan(roads, exactStreetLights, this.settings.worldScale(),
+         widths.main(), widths.normal(), widths.dirt(), minX, minZ, minX + CHUNK_MASK, minZ + CHUNK_MASK);
       EarthChunkGenerator.PreparedChunkRoadLights prepared = new EarthChunkGenerator.PreparedChunkRoadLights();
-      this.prepareExactStreetLightsForChunk(
-         exactStreetLights,
-         blocksPerDegree,
-         worldScale,
-         fenceCount,
-         chunkMinX,
-         chunkMinZ,
-         chunkRoadClass,
-         chunkRoadMode,
-         chunkRoadDeckY,
-         bridgeSupportShaftPresent,
-         bridgeSupportShaftBottomY,
-         bridgeSupportShaftTopY,
-         bridgeSupportCapPresent,
-         bridgeSupportCapBottomY,
-         bridgeSupportCapTopY,
-         preparedBuildings,
-         prepared,
-         occupiedAnchors,
-         minLampSpacingBlocks
-      );
-
-      for (RoadFeature road : roads) {
-         if (road.mode() == RoadMode.TUNNEL) {
-            continue;
-         }
-
-         int roadWidth = RoadSurfaceStyle.effectiveRoadWidth(road, roadWidthForClass(road.roadClass(), widths), worldScale);
-         if (roadWidth < ROAD_LIGHT_MIN_ROAD_WIDTH_BLOCKS || road.pointCount() < 2) {
-            continue;
-         }
-
-         int segmentCount = road.pointCount() - 1;
-         double[] worldXs = new double[road.pointCount()];
-         double[] worldZs = new double[road.pointCount()];
-         double[] segmentStarts = new double[segmentCount];
-         double[] segmentLengths = new double[segmentCount];
-
-         for (int i = 0; i < road.pointCount(); i++) {
-            worldXs[i] = road.lonAt(i) * blocksPerDegree;
-            worldZs[i] = EarthProjection.latToBlockZ(road.latAt(i), worldScale);
-         }
-
-         double totalLength = 0.0;
-         for (int i = 0; i < segmentCount; i++) {
-            double dx = worldXs[i + 1] - worldXs[i];
-            double dz = worldZs[i + 1] - worldZs[i];
-            segmentStarts[i] = totalLength;
-            segmentLengths[i] = Math.sqrt(dx * dx + dz * dz);
-            totalLength += segmentLengths[i];
-         }
-
-         double endpointInset = Math.max(Math.max(4.0, roadWidth), spacingBlocks * 0.75);
-         if (!(totalLength > endpointInset * 2.0)) {
-            continue;
-         }
-
-         boolean placeLeft = true;
-         for (double station = endpointInset; station <= totalLength - endpointInset + 1.0E-6; station += spacingBlocks) {
-            EarthChunkGenerator.SampledRoadStation sampled = sampleRoadStation(worldXs, worldZs, segmentStarts, segmentLengths, station);
-            if (sampled == null) {
-               placeLeft = !placeLeft;
-               continue;
-            }
-
-            EarthChunkGenerator.PreparedRoadLight light = this.prepareRoadLightAtStation(
-               sampled,
-               placeLeft,
-               road,
-               roadWidth,
-               fenceCount,
-               chunkMinX,
-               chunkMinZ,
-               chunkRoadClass,
-               chunkRoadMode,
-               chunkRoadDeckY,
-               bridgeSupportShaftPresent,
-               bridgeSupportShaftBottomY,
-               bridgeSupportShaftTopY,
-               bridgeSupportCapPresent,
-               bridgeSupportCapBottomY,
-               bridgeSupportCapTopY,
-               preparedBuildings,
-               prepared,
-               occupiedAnchors,
-               minLampSpacingBlocks
-            );
-            if (light != null) {
-               prepared.add(light);
-            }
-
-            placeLeft = !placeLeft;
-         }
-      }
-
-      return prepared.isEmpty() ? null : prepared;
-   }
-
-   private void prepareExactStreetLightsForChunk(
-      List<OsmStreetLightFeature> streetLights,
-      double blocksPerDegree,
-      double worldScale,
-      int fenceCount,
-      int chunkMinX,
-      int chunkMinZ,
-      byte[] chunkRoadClass,
-      byte[] chunkRoadMode,
-      int[] chunkRoadDeckY,
-      boolean[] bridgeSupportShaftPresent,
-      int[] bridgeSupportShaftBottomY,
-      int[] bridgeSupportShaftTopY,
-      boolean[] bridgeSupportCapPresent,
-      int[] bridgeSupportCapBottomY,
-      int[] bridgeSupportCapTopY,
-      EarthChunkGenerator.PreparedChunkBuildings preparedBuildings,
-      EarthChunkGenerator.PreparedChunkRoadLights preparedRoadLights,
-      boolean[] occupiedAnchors,
-      int minLampSpacingBlocks
-   ) {
-      if (streetLights == null || streetLights.isEmpty()) {
-         return;
-      }
-
-      for (OsmStreetLightFeature streetLight : streetLights) {
-         int localX = quantizeRoadCoordinate(streetLight.longitude() * blocksPerDegree) - chunkMinX;
-         int localZ = quantizeRoadCoordinate(EarthProjection.latToBlockZ(streetLight.latitude(), worldScale)) - chunkMinZ;
-         EarthChunkGenerator.RoadLightAnchor anchor = findExactRoadLightAnchor(localX, localZ, chunkRoadClass, chunkRoadMode, chunkRoadDeckY);
-         if (anchor == null || occupiedAnchors[anchor.index()]) {
-            continue;
-         }
-
-         if (hasNearbyPreparedRoadLight(anchor.localX(), anchor.localZ(), minLampSpacingBlocks, preparedRoadLights)) {
-            continue;
-         }
-
-         int wallBaseY = anchor.baseY() + 1;
-         int topY = anchor.baseY() + fenceCount + 3;
-         if (preparedBuildings != null && preparedBuildings.intersectsSpan(anchor.localX(), anchor.localZ(), wallBaseY, topY)) {
-            continue;
-         }
-
-         if (intersectsRoadLightBridgeSupport(
-            anchor.localX(),
-            anchor.localZ(),
-            wallBaseY,
-            topY,
-            bridgeSupportShaftPresent,
-            bridgeSupportShaftBottomY,
-            bridgeSupportShaftTopY,
-            bridgeSupportCapPresent,
-            bridgeSupportCapBottomY,
-            bridgeSupportCapTopY
-         )) {
-            continue;
-         }
-
-         occupiedAnchors[anchor.index()] = true;
-         preparedRoadLights.add(
-            new EarthChunkGenerator.PreparedRoadLight(
-               anchor.localX(), anchor.localZ(), anchor.baseY(), fenceCount, roadLightFacingForAnchor(anchor.localX(), anchor.localZ(), chunkRoadClass)
-            )
-         );
-      }
-   }
-
-   private static EarthChunkGenerator.RoadLightAnchor findExactRoadLightAnchor(
-      int localX, int localZ, byte[] chunkRoadClass, byte[] chunkRoadMode, int[] chunkRoadDeckY
-   ) {
-      int scanRadius = 5;
-      int minX = Math.max(0, localX - scanRadius);
-      int maxX = Math.min(CHUNK_MASK, localX + scanRadius);
-      int minZ = Math.max(0, localZ - scanRadius);
-      int maxZ = Math.min(CHUNK_MASK, localZ + scanRadius);
-      EarthChunkGenerator.RoadLightAnchor best = null;
-      int bestBoundary = -1;
-      int bestDistanceSq = Integer.MAX_VALUE;
-      byte tunnelModeId = (byte)(RoadMode.TUNNEL.ordinal() + 1);
-
-      for (int z = minZ; z <= maxZ; z++) {
-         for (int x = minX; x <= maxX; x++) {
-            int index = chunkIndex(x, z);
-            if (chunkRoadClass[index] > 0 && chunkRoadMode[index] != tunnelModeId) {
-               int dx = x - localX;
-               int dz = z - localZ;
-               int distanceSq = dx * dx + dz * dz;
-               int boundary = roadBoundaryScore(x, z, chunkRoadClass);
-               if (boundary > bestBoundary || boundary == bestBoundary && distanceSq < bestDistanceSq) {
-                  bestBoundary = boundary;
-                  bestDistanceSq = distanceSq;
-                  best = new EarthChunkGenerator.RoadLightAnchor(x, z, chunkRoadDeckY[index], index);
+      for (StreetLightPlanner.Lamp lamp : lamps) {
+         int localX = lamp.worldX() - minX;
+         int localZ = lamp.worldZ() - minZ;
+         int index = chunkIndex(localX, localZ);
+         int baseY = terrainSurfaces[index];
+         // Geometry sets the position; masks can veto it, but must never snap a pole onto a traffic lane.
+         if (chunkRoadClass[index] > 0 || waterFlags[index] && waterSurfaces[index] > baseY) continue;
+         int topY = baseY + lamp.height() + 3;
+         boolean blocked = preparedBuildings != null && preparedBuildings.features().stream()
+            .anyMatch(building -> building.groundContact() && building.blueprint().nearEntranceApproach(lamp.worldX(), lamp.worldZ()));
+         for (int z = Math.max(0, localZ - 1); z <= Math.min(CHUNK_MASK, localZ + 1) && !blocked; z++) {
+            for (int x = Math.max(0, localX - 1); x <= Math.min(CHUNK_MASK, localX + 1); x++) {
+               if (preparedBuildings != null && preparedBuildings.intersectsSpan(x, z, baseY - 1, topY)
+                  || intersectsRoadLightBridgeSupport(x, z, baseY - 1, topY, bridgeSupportShaftPresent,
+                     bridgeSupportShaftBottomY, bridgeSupportShaftTopY, bridgeSupportCapPresent,
+                     bridgeSupportCapBottomY, bridgeSupportCapTopY)) {
+                  blocked = true;
+                  break;
                }
             }
          }
+         if (!blocked) prepared.add(new EarthChunkGenerator.PreparedRoadLight(lamp, baseY));
       }
-
-      return bestBoundary <= 0 ? null : best;
+      return prepared.isEmpty() ? null : prepared;
    }
 
    private static int roadBoundaryScore(int localX, int localZ, byte[] chunkRoadClass) {
@@ -10372,72 +9894,6 @@ public final class EarthChunkGenerator extends ChunkGenerator {
       return Direction.NORTH;
    }
 
-   private EarthChunkGenerator.PreparedRoadLight prepareRoadLightAtStation(
-      EarthChunkGenerator.SampledRoadStation sampled,
-      boolean placeLeft,
-      RoadFeature road,
-      int roadWidth,
-      int fenceCount,
-      int chunkMinX,
-      int chunkMinZ,
-      byte[] chunkRoadClass,
-      byte[] chunkRoadMode,
-      int[] chunkRoadDeckY,
-      boolean[] bridgeSupportShaftPresent,
-      int[] bridgeSupportShaftBottomY,
-      int[] bridgeSupportShaftTopY,
-      boolean[] bridgeSupportCapPresent,
-      int[] bridgeSupportCapBottomY,
-      int[] bridgeSupportCapTopY,
-      EarthChunkGenerator.PreparedChunkBuildings preparedBuildings,
-      EarthChunkGenerator.PreparedChunkRoadLights preparedRoadLights,
-      boolean[] occupiedAnchors,
-      int minLampSpacingBlocks
-   ) {
-      int roadClassId = roadClassId(road.roadClass());
-      int roadModeId = road.mode().ordinal() + 1;
-      EarthChunkGenerator.RoadLightAnchor anchor = findRoadLightAnchor(
-         sampled, placeLeft, roadWidth, roadClassId, roadModeId, chunkMinX, chunkMinZ, chunkRoadClass, chunkRoadMode, chunkRoadDeckY
-      );
-      if (anchor == null || occupiedAnchors[anchor.index()]) {
-         return null;
-      }
-
-      if (hasNearbyPreparedRoadLight(anchor.localX(), anchor.localZ(), minLampSpacingBlocks, preparedRoadLights)) {
-         return null;
-      }
-
-      int wallBaseY = anchor.baseY() + 1;
-      int topY = anchor.baseY() + fenceCount + 3;
-      if (preparedBuildings != null && preparedBuildings.intersectsSpan(anchor.localX(), anchor.localZ(), wallBaseY, topY)) {
-         return null;
-      }
-
-      if (intersectsRoadLightBridgeSupport(
-         anchor.localX(),
-         anchor.localZ(),
-         wallBaseY,
-         topY,
-         bridgeSupportShaftPresent,
-         bridgeSupportShaftBottomY,
-         bridgeSupportShaftTopY,
-         bridgeSupportCapPresent,
-         bridgeSupportCapBottomY,
-         bridgeSupportCapTopY
-      )) {
-         return null;
-      }
-
-      occupiedAnchors[anchor.index()] = true;
-      return new EarthChunkGenerator.PreparedRoadLight(
-         anchor.localX(),
-         anchor.localZ(),
-         anchor.baseY(),
-         fenceCount,
-         dominantHorizontalDirection(sampled.tangentX(), sampled.tangentZ())
-      );
-   }
-
    private void placePreparedRoadLights(WorldGenLevel level, ChunkAccess chunk) {
       long chunkKey = MinecraftVersionCompat.packChunkPos(
          MinecraftVersionCompat.chunkX(chunk.getPos()), MinecraftVersionCompat.chunkZ(chunk.getPos())
@@ -10448,62 +9904,16 @@ public final class EarthChunkGenerator extends ChunkGenerator {
    }
 
    private void placePreparedRoadLights(WorldGenLevel level, ChunkAccess chunk, EarthChunkGenerator.PreparedChunkRoadLights prepared) {
-      if (prepared == null || prepared.isEmpty()) {
-         return;
-      }
-
+      if (prepared == null || prepared.isEmpty()) return;
       int minY = chunk.getMinY();
       int maxY = minY + chunk.getHeight() - 1;
-      int chunkMinX = chunk.getPos().getMinBlockX();
-      int chunkMinZ = chunk.getPos().getMinBlockZ();
       int flags = level instanceof ServerLevel ? 2 : 260;
-      MutableBlockPos cursor = new MutableBlockPos();
-
       for (EarthChunkGenerator.PreparedRoadLight light : prepared.lights()) {
-         int baseY = light.baseY();
-         int wallY = baseY + 1;
-         int glowY = wallY + light.fenceCount() + 1;
-         int trapdoorY = glowY + 1;
-         if (wallY < minY || trapdoorY > maxY) {
-            continue;
-         }
-
-         int worldX = chunkMinX + light.localX();
-         int worldZ = chunkMinZ + light.localZ();
-         if (!this.canPlacePreparedRoadLight(level, worldX, worldZ, baseY, light.fenceCount(), cursor)) {
-            continue;
-         }
-
-         cursor.set(worldX, wallY, worldZ);
-         level.setBlock(cursor, ROAD_LIGHT_BASE_STATE, flags);
-
-         for (int i = 1; i <= light.fenceCount(); i++) {
-            cursor.set(worldX, wallY + i, worldZ);
-            level.setBlock(cursor, ROAD_LIGHT_FENCE_STATE, flags);
-         }
-
-         cursor.set(worldX, glowY, worldZ);
-         level.setBlock(cursor, ROAD_LIGHT_GLOW_STATE, flags);
-         cursor.set(worldX, trapdoorY, worldZ);
-         level.setBlock(cursor, roadLightTrapdoorState(light.trapdoorFacing()), flags);
+         StreetLightModel.place(light.lamp(), light.baseY(), minY, maxY,
+            position -> level.hasChunk(position.getX() >> 4, position.getZ() >> 4)
+               ? level.getBlockState(position) : Blocks.BARRIER.defaultBlockState(),
+            (position, state) -> level.setBlock(position, state, flags));
       }
-   }
-
-   private boolean canPlacePreparedRoadLight(WorldGenLevel level, int worldX, int worldZ, int baseY, int fenceCount, MutableBlockPos cursor) {
-      cursor.set(worldX, baseY, worldZ);
-      if (!isRoadDeckState(level.getBlockState(cursor))) {
-         return false;
-      }
-
-      int topY = baseY + fenceCount + 3;
-      for (int y = baseY + 1; y <= topY; y++) {
-         cursor.set(worldX, y, worldZ);
-         if (!isRoadLightReplaceable(level.getBlockState(cursor))) {
-            return false;
-         }
-      }
-
-      return true;
    }
 
    private void setChunkBlock(WorldGenLevel level, ChunkAccess chunk, MutableBlockPos cursor, BlockState state) {
@@ -15069,9 +14479,6 @@ public final class EarthChunkGenerator extends ChunkGenerator {
    private record AnalyzedBuildingFeature(EarthChunkGenerator.RasterizedBuildingFeature rasterized, IntArrayList groundSamples) {
    }
 
-   private record SampledRoadStation(double worldX, double worldZ, double tangentX, double tangentZ) {
-   }
-
    private record RoadLightAnchor(int localX, int localZ, int baseY, int index) {
    }
 
@@ -15211,7 +14618,7 @@ public final class EarthChunkGenerator extends ChunkGenerator {
       int[] columnTopY,
       BuildingBlueprint blueprint,
       boolean groundContact,
-      EarthChunkGenerator.BuildingCoreLayout coreLayout
+      TellusBuildingInteriors interior
    ) {
       private int boundaryDistance(int index) {
          return this.boundaryDistance[index];
@@ -15240,24 +14647,13 @@ public final class EarthChunkGenerator extends ChunkGenerator {
       }
    }
 
-   private record PreparedRoadLight(int localX, int localZ, int baseY, int fenceCount, Direction trapdoorFacing) {
+   private record PreparedRoadLight(StreetLightPlanner.Lamp lamp, int baseY) {
    }
 
    private record UndergroundStructureEnvelope(int lowestSurfaceY) {
    }
 
    private record BuildingBoundaryInfo(boolean[] boundary, int[] boundaryDistance) {
-   }
-
-   private record BuildingCoreLayout(int minX, int maxX, int minZ, int maxZ, Direction stairFacing) {
-      private boolean contains(int worldX, int worldZ) {
-         return worldX >= this.minX && worldX <= this.maxX && worldZ >= this.minZ && worldZ <= this.maxZ;
-      }
-
-      private boolean boundary(int worldX, int worldZ) {
-         return this.contains(worldX, worldZ)
-            && (worldX == this.minX || worldX == this.maxX || worldZ == this.minZ || worldZ == this.maxZ);
-      }
    }
 
    private record SurfacePalette( BlockState top,  BlockState underwaterTop,  BlockState filler, int depth) {

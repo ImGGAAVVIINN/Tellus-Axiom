@@ -215,7 +215,10 @@ public final class TellusBuildingProfiles {
       }
 
       return switch (category) {
-         case HOUSE, FARM -> feature.widthLongerThanDepth() ? BuildingProfile.RoofProfile.GABLED_X : BuildingProfile.RoofProfile.GABLED_Z;
+         case HOUSE -> feature.areaSquareMeters() <= 400.0 && Math.floorMod(feature.featureId(), 4) == 0
+            ? BuildingProfile.RoofProfile.HIPPED
+            : feature.widthLongerThanDepth() ? BuildingProfile.RoofProfile.GABLED_X : BuildingProfile.RoofProfile.GABLED_Z;
+         case FARM -> feature.widthLongerThanDepth() ? BuildingProfile.RoofProfile.GABLED_X : BuildingProfile.RoofProfile.GABLED_Z;
          case RESIDENTIAL -> shouldAutoPitchResidentialRoof(feature)
             ? (feature.widthLongerThanDepth() ? BuildingProfile.RoofProfile.GABLED_X : BuildingProfile.RoofProfile.GABLED_Z)
             : BuildingProfile.RoofProfile.FLAT;
@@ -230,7 +233,7 @@ public final class TellusBuildingProfiles {
 
    private static int pitchedRoofRise(OsmBuildingFeature feature, double worldScale, int floorCount, int storeyHeightBlocks) {
       double scaledFootprint = Math.sqrt(Math.max(1.0, feature.areaSquareMeters())) / Math.max(1.0, worldScale);
-      int spanRise = (int)Math.round(scaledFootprint / 4.5);
+      int spanRise = (int)Math.round(scaledFootprint / 3.5);
       int wallCap = Math.max(2, (int)Math.round(floorCount * storeyHeightBlocks * 0.6));
       return Math.max(2, Math.min(Math.min(6, wallCap), Math.max(spanRise, (int)Math.round(feature.heightMeters() / 8.0))));
    }

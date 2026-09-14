@@ -2,11 +2,11 @@ package com.yucareux.tellus.worldgen;
 
 import it.unimi.dsi.fastutil.doubles.DoubleArrayList;
 
-final class ScanlinePolygonRasterizer {
+public final class ScanlinePolygonRasterizer {
    private ScanlinePolygonRasterizer() {
    }
 
-   static void fill(double[][] ringXs, double[][] ringZs, int minWorldX, int minWorldZ, int maxWorldX, int maxWorldZ, CellConsumer consumer) {
+   public static void fill(double[][] ringXs, double[][] ringZs, int minWorldX, int minWorldZ, int maxWorldX, int maxWorldZ, CellConsumer consumer) {
       if (ringXs.length != ringZs.length || ringXs.length == 0) {
          return;
       } else {
@@ -128,7 +128,7 @@ final class ScanlinePolygonRasterizer {
    }
 
    @FunctionalInterface
-   interface CellConsumer {
+   public interface CellConsumer {
       void accept(int worldX, int worldZ);
    }
 }

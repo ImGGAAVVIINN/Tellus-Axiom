@@ -18,6 +18,17 @@ public final class TellusBuildingFacade {
       int floorTop,
       int y
    ) {
+      if (TellusBuildingArchitecture.redesigned(blueprint) && blueprint.isFacadeCell(boundaryDistance, floorIndex)) {
+         if (TellusBuildingArchitecture.window(blueprint, boundaryDistance, worldX, worldZ, floorIndex, y)) {
+            return palette.window();
+         }
+         int edge = TellusBuildingArchitecture.edgeDistance(blueprint, worldX, worldZ, floorIndex);
+         if (edge == 0 || blueprint.profile().archetype() == BuildingProfile.Archetype.TOWER
+            || floorIndex == 0 && TellusBuildingArchitecture.entranceBay(blueprint, worldX, worldZ)) {
+            return palette.trim();
+         }
+         return palette.wall();
+      }
       return ArnisBuildingRules.wallBlockAt(blueprint, palette, boundaryDistance, worldX, worldZ, floorIndex, floorBottom, floorTop, y);
    }
 
@@ -31,6 +42,9 @@ public final class TellusBuildingFacade {
       int floorTop,
       int y
    ) {
+      if (TellusBuildingArchitecture.redesigned(blueprint)) {
+         return TellusBuildingArchitecture.window(blueprint, boundaryDistance, worldX, worldZ, floorIndex, y);
+      }
       return ArnisBuildingRules.isWindow(blueprint, boundaryDistance, worldX, worldZ, floorIndex, floorBottom, floorTop, y);
    }
 

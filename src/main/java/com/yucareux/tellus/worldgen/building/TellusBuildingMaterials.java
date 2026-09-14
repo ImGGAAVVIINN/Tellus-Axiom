@@ -242,6 +242,13 @@ public final class TellusBuildingMaterials {
       BlockState roof = BUILDING_ROOF_STATE;
       if (category == BuildingProfile.BuildingCategory.HOUSE) {
          TellusBuildingStyles.HouseStyle houseStyle = TellusBuildingStyles.resolveHouseStyle(profile, blueprintSeed);
+         wall = switch (houseStyle) {
+            case WHITE_SLATE -> BUILDING_RESIDENTIAL_WALL_STATE;
+            case WARM_CLAY -> BUILDING_SANDSTONE_WALL_STATE;
+            case GRAY_CHARCOAL -> BUILDING_COLD_WALL_STATE;
+            case BRICK_SLATE -> BUILDING_BRICK_WALL_STATE;
+            case PALE_STONE -> BUILDING_PALE_STONE_WALL_STATE;
+         };
          trim = switch (houseStyle) {
             case WHITE_SLATE -> BUILDING_WHITE_TRIM_STATE;
             case WARM_CLAY -> BUILDING_SANDSTONE_TRIM_STATE;
@@ -379,6 +386,9 @@ public final class TellusBuildingMaterials {
       if (category != BuildingProfile.BuildingCategory.GREENHOUSE) {
          wall = wallBlockForHint(style.wallMaterialHint(), wall);
       }
+      if (category == BuildingProfile.BuildingCategory.HOUSE) {
+         secondaryWall = wall;
+      }
       roof = category == BuildingProfile.BuildingCategory.GREENHOUSE ? roof : roofBlockForHint(style.roofMaterialHint(), roof);
       if (isPitchedRoof(profile.roofProfile())) {
          roof = pitchedRoofBlock(roof, category, blueprintSeed);
@@ -413,7 +423,8 @@ public final class TellusBuildingMaterials {
          window,
          BUILDING_DARK_WINDOW_STATE,
          floor,
-         BUILDING_PARTITION_STATE,
+         profile.archetype() == BuildingProfile.Archetype.HOUSE || profile.archetype() == BuildingProfile.Archetype.APARTMENT
+            ? BUILDING_WHITE_CONCRETE_STATE : BUILDING_PARTITION_STATE,
          stair,
          slab,
          BUILDING_LIGHT_STATE,
@@ -452,7 +463,7 @@ public final class TellusBuildingMaterials {
       int floorBottom = blueprint.floorBottomY(floorIndex);
       int floorTop = blueprint.floorTopY(floorIndex);
       int sampleY = Math.min(floorTop, floorBottom + Math.min(2, Math.max(1, blueprint.profile().storeyHeightBlocks() - 1)));
-      return ArnisBuildingRules.wallBlockAt(blueprint, palette, boundaryDistance, worldX, worldZ, floorIndex, floorBottom, floorTop, sampleY);
+      return TellusBuildingFacade.resolveFacadeBlock(blueprint, palette, boundaryDistance, worldX, worldZ, floorIndex, floorBottom, floorTop, sampleY);
    }
 
    public static BlockState resolveLodRoofBlock(TellusBuildingMaterials.BuildingMaterialPalette palette, boolean roofEdge) {
