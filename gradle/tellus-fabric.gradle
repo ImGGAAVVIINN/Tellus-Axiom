@@ -17,6 +17,7 @@ def distantHorizonsRuntimePath = providers.gradleProperty(config.distantHorizons
 def usesLocalRuntimeMods = minecraftVersion == '26.2'
 def overriddenSharedMainSources = (config.overriddenSharedMainSources ?: []) as Set
 def overriddenSharedClientSources = (config.overriddenSharedClientSources ?: []) as Set
+def overriddenSharedTestSources = (config.overriddenSharedTestSources ?: []) as Set
 def inheritedMainJavaDirs = inheritedMainJavaProjects.collect { inheritedProject ->
 	rootProject.file("${inheritedProject}/src/main/java")
 }
@@ -133,7 +134,13 @@ sourceSets {
 		}
 	}
 	test {
-		java.setSrcDirs(rootProject.ext.tellusSharedSourceDirs(sharedTestSourceLayers, 'test/java') + [project.file('src/test/java')])
+		java {
+			def testJavaDirs = rootProject.ext.tellusSharedSourceDirs(sharedTestSourceLayers, 'test/java') + [project.file('src/test/java')]
+			setSrcDirs(testJavaDirs)
+			exclude { element ->
+				isShadowed(element, overriddenSharedTestSources, testJavaDirs)
+			}
+		}
 		resources.setSrcDirs(rootProject.ext.tellusSharedSourceDirs(sharedTestSourceLayers, 'test/resources') + [project.file('src/test/resources')])
 	}
 }

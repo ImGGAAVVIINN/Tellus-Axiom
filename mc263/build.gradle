@@ -1,0 +1,66 @@
+plugins {
+	id 'net.fabricmc.fabric-loom' version '1.16.1'
+	id 'maven-publish'
+}
+
+ext.tellus = [
+	minecraftVersion: '26.3',
+	loaderVersion: '0.19.5',
+	fabricVersion: '0.161.0+26.3',
+	fabricDependencyConfiguration: 'implementation',
+	javaVersion: 25,
+	distantHorizonsRuntimeProperty: 'mc263_distant_horizons_runtime_path',
+	sharedSourceLayers: ['post-1201', 'mc262', 'mc263', 'fabric'],
+	overriddenSharedMainSources: [
+		'com/yucareux/tellus/compat/MinecraftRelease.java',
+		'com/yucareux/tellus/compat/MinecraftVersionCompat.java',
+		'com/yucareux/tellus/compat/TellusMinecraftCompat.java',
+		'com/yucareux/tellus/integration/voxy/VoxyPregenVersionCompat.java',
+		'com/yucareux/tellus/world/realtime/RealtimeVersionCompat.java',
+		'com/yucareux/tellus/worldgen/EarthBiomeSource.java',
+		'com/yucareux/tellus/worldgen/EarthChunkGenerator.java',
+		'com/yucareux/tellus/worldgen/UndergroundFeatureClassifier.java',
+		'com/yucareux/tellus/worldgen/caves/TellusCaveCarver.java',
+		'com/yucareux/tellus/worldgen/caves/TellusConfiguredCarvers.java',
+		'com/yucareux/tellus/worldgen/caves/TellusEmptyBeardifier.java',
+		'com/yucareux/tellus/worldgen/caves/TellusNoiseSettingsAdapter.java',
+		'com/yucareux/tellus/worldgen/caves/TellusRavineCarver.java',
+		'com/yucareux/tellus/worldgen/caves/TellusVanillaCarverRunner.java',
+		'com/yucareux/tellus/worldgen/caves/TellusVanillaNoiseCaveSampler.java',
+		'com/yucareux/tellus/mixin/HeightRangePlacementMixin.java',
+	],
+	overriddenSharedClientSources: [
+		'com/yucareux/tellus/client/preview/TerrainPreview.java',
+		'com/yucareux/tellus/client/screen/EarthCustomizeScreen.java',
+	],
+	overriddenSharedTestSources: [
+		'com/yucareux/tellus/worldgen/LodBiomeSnowTest.java',
+		'com/yucareux/tellus/worldgen/UndergroundFeatureClassifierTest.java',
+		'com/yucareux/tellus/worldgen/building/TellusBuildingInteriorRenderingTest.java',
+		'com/yucareux/tellus/worldgen/caves/TellusEmptyBeardifierTest.java',
+		'com/yucareux/tellus/worldgen/road/StreetLightRenderingTest.java',
+	],
+	mapboxVersion: '24.1.1',
+	protobufVersion: '4.28.2',
+	officialMappings: false,
+	testDistantHorizonsRuntime: true,
+]
+
+apply from: rootProject.file('gradle/tellus-fabric.gradle')
+
+tasks.register('simulateFastLodDataLoading', JavaExec) {
+	group = 'verification'
+	description = 'Profiles Tellus source loading for Fast LODs at experimental 1:1 height without starting Minecraft.'
+	classpath = sourceSets.test.runtimeClasspath
+	mainClass = 'com.yucareux.tellus.worldgen.FastLodDataLoadingSimulation'
+	maxHeapSize = '2g'
+	jvmArgs '-Dtellus.experimentalHeight.coordinateProfile=global_mercator_land_v2'
+	def defaultSimulationGameDir = layout.buildDirectory.dir('lod-simulation-game').get().asFile.absolutePath
+	def simulationGameDir = providers.gradleProperty('simGameDir').getOrElse(defaultSimulationGameDir)
+	systemProperty 'tellus.gameDir', simulationGameDir
+	systemProperty 'tellus.configDir', new File(simulationGameDir, 'config').absolutePath
+	args "--latitude=${providers.gradleProperty('simLatitude').getOrElse('20.6534')}"
+	args "--longitude=${providers.gradleProperty('simLongitude').getOrElse('-105.2253')}"
+	args "--grid=${providers.gradleProperty('simGrid').getOrElse('64')}"
+	args "--details=${providers.gradleProperty('simDetails').getOrElse('0,4,6,8,11')}"
+}
